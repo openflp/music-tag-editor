@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "fontFamily": "Inter, Segoe UI, system-ui, sans-serif",
+  "fontSize": 13,
+  "colors": {
+    "titlebar": "#141414",
+    "titlebarForeground": "#f5f5f7",
+    "menuBar": "#141414",
+    "menuItemSelection": "#2a2a2a",
+    "menuSeparator": "#2a2a2a",
+    "svg": "#f5f5f7"
+  }
+}

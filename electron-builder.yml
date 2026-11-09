@@ -1,0 +1,32 @@
+appId: com.musictageditor.app
+productName: Music Tag Editor
+copyright: Copyright © 2026 Music Tag Editor
+directories:
+  output: release
+  buildResources: build
+files:
+  - out/**
+  - package.json
+asar: true
+npmRebuild: false
+win:
+  target:
+    - nsis
+  artifactName: ${productName}-${version}-win-${arch}.${ext}
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+mac:
+  target:
+    - dmg
+  category: public.app-category.music
+  artifactName: ${productName}-${version}-mac-${arch}.${ext}
+linux:
+  target:
+    - AppImage
+  category: Audio
+  artifactName: ${productName}-${version}-linux-${arch}.${ext}
+  maintainer: Music Tag Editor
+extraMetadata:
+  main: out/main/index.js

@@ -1,0 +1,13 @@
+---
+description: Границы Music Tag Editor — процессы Electron, IPC и запись тегов
+alwaysApply: true
+---
+
+# Music Tag Editor
+
+- Теги и файловая система только в `electron/`. Renderer не импортирует `fs`, `node-taglib-sharp` и `electron`.
+- Новый метод окна добавляй в `shared/types.ts`, preload и `src/renderer/src/shared/api/window.ts` вместе.
+- В `WriteJob` клади только изменённые поля и обложку. Не перезаписывай исходные теги целиком.
+- Аргументы IPC проверяй в `electron/services/validate.ts`.
+- Не отключай `contextIsolation`, `sandbox` и не включай `nodeIntegration`.
+- Стили окна — переменные в `src/renderer/src/app/styles.css`. Inline-стили ломают прод-CSP.
