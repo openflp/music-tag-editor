@@ -6,6 +6,7 @@ import { packFor, type LocaleId } from '@shared/i18n'
 import { parseLanguagePack } from '@shared/language-pack'
 import { IPC, type AppSettings, type HistoryMap, type MenuCommand, type WriteJob, type WriteResult } from '@shared/types'
 import { TITLEBAR_BACKGROUND, TITLEBAR_FOREGROUND, TITLEBAR_OVERLAY_HEIGHT, WINDOW_MIN_HEIGHT, WINDOW_MIN_WIDTH } from '@shared/titlebar'
+import { installMediaProtocol, registerMediaScheme } from './media'
 import { attachTitlebar } from './titlebar'
 import { copyFileList, copyPlainText } from '../services/clipboard'
 import { readTracks } from '../services/library'
@@ -103,8 +104,8 @@ function installCsp(): void {
   // В dev Vite вставляет inline-преамбулу React Refresh. В сборке Monaco
   // поднимает воркер через blob и дописывает стили темы в <style>.
   const policy = dev
-    ? "default-src 'self' data: blob:; script-src 'self' 'unsafe-inline' 'unsafe-eval'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ws: http://localhost:*"
-    : "default-src 'self'; script-src 'self'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; style-src-attr 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; object-src 'none'; base-uri 'self'; frame-src 'none'"
+    ? "default-src 'self' data: blob:; script-src 'self' 'unsafe-inline' 'unsafe-eval'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; media-src media:; connect-src 'self' ws: http://localhost:*"
+    : "default-src 'self'; script-src 'self'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; style-src-attr 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; media-src media:; object-src 'none'; base-uri 'self'; frame-src 'none'"
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
     callback({
       responseHeaders: {
@@ -447,6 +448,8 @@ function registerIpc(): void {
   })
 }
 
+registerMediaScheme()
+
 const gotLock = app.requestSingleInstanceLock()
 if (!gotLock) {
   app.quit()
@@ -459,6 +462,7 @@ if (!gotLock) {
   })
   app.whenReady().then(() => {
     installCsp()
+    installMediaProtocol()
     buildMenu()
     registerIpc()
     applyLiveSettings(readAppSettings())

@@ -4,9 +4,30 @@ import { useEditor } from '@/features/editor/model/store'
 import { CoverIcon, PauseIcon, PlayIcon, RepeatIcon, RepeatOneIcon, ShuffleIcon, SkipNextIcon, SkipPrevIcon, VolumeIcon, VolumeOffIcon } from '@/shared/ui/icons'
 import { useCoverActions } from '@/widgets/metadata-form/cover-actions'
 import { getPrefs, setPlayerVolume } from '@/features/settings/prefs'
-import { useI18n } from '@/shared/i18n'
+import { getPack, useI18n } from '@/shared/i18n'
+import { mediaTrackUrl } from '@shared/media'
 
 type RepeatMode = 'off' | 'all' | 'one'
+
+function playableOrder(): string[] {
+  const state = useEditor.getState()
+  const known = new Set(state.tracks.filter((track) => !track.error).map((track) => track.path))
+  const listed = state.listOrder.filter((path) => known.has(path))
+  if (listed.length === known.size && known.size) return listed
+  return [...known]
+}
+
+function nextPath(from: string, shuffled: boolean): string | null {
+  const order = playableOrder()
+  if (!order.length) return null
+  if (shuffled) {
+    const pool = order.filter((path) => path !== from)
+    if (!pool.length) return order[0] ?? null
+    return pool[Math.floor(Math.random() * pool.length)] ?? null
+  }
+  const index = order.indexOf(from)
+  return order[(index < 0 ? 0 : index + 1) % order.length] ?? null
+}
 
 function paintBar(fill: HTMLSpanElement | null, thumb: HTMLSpanElement | null, ratio: number) {
   const clamped = Math.min(1, Math.max(0, ratio))
@@ -49,9 +70,14 @@ export function Player({ hidden = false }: { hidden?: boolean }) {
   const [muted, setMuted] = useState(false)
   const [volumeHold, setVolumeHold] = useState(false)
   const [seeking, setSeeking] = useState(false)
+  const [heardMs, setHeardMs] = useState(0)
   const positionRef = useRef(0)
+  const audioRef = useRef<HTMLAudioElement>(null)
+  const failedRef = useRef('')
   const advanceRef = useRef(false)
   const seekingRef = useRef(false)
+  const holdMs = useRef<number | null>(null)
+  const barRef = useRef<HTMLSpanElement>(null)
   const secondRef = useRef(-1)
   const fillRef = useRef<HTMLSpanElement>(null)
   const thumbRef = useRef<HTMLSpanElement>(null)
@@ -62,15 +88,19 @@ export function Player({ hidden = false }: { hidden?: boolean }) {
   const volumeThumbRef = useRef<HTMLSpanElement>(null)
 
   const cover = coverActions.cover
-  const duration = durationMs ? formatDuration(durationMs) : '0:00'
+  const totalMs = heardMs || durationMs
+  const totalRef = useRef(0)
+  totalRef.current = totalMs
+  const duration = totalMs ? formatDuration(totalMs) : '0:00'
   const repeatLabel = repeat === 'one' ? pack.loopOne : repeat === 'all' ? pack.loopAll : pack.loopOff
 
   paintRef.current = (ms: number, total: number) => {
     const ratio = total > 0 ? Math.min(1, Math.max(0, ms / total)) : 0
     paintBar(fillRef.current, thumbRef.current, ratio)
-    if (seekRef.current && !seekingRef.current) {
+    const seek = seekRef.current
+    if (seek && !seekingRef.current) {
       const next = String(Math.min(ms, Math.max(total, 1)))
-      if (seekRef.current.value !== next) seekRef.current.value = next
+      if (seek.value !== next) seek.value = next
     }
     const shown = Math.round(ms / 1000)
     if (elapsedRef.current && shown !== secondRef.current) {
@@ -90,13 +120,106 @@ export function Player({ hidden = false }: { hidden?: boolean }) {
   useEffect(() => {
     positionRef.current = 0
     secondRef.current = -1
+    failedRef.current = ''
+    holdMs.current = null
+    setHeardMs(0)
     paintRef.current(0, 0)
+    const audio = audioRef.current
+    if (audio) {
+      if (!currentPath) {
+        audio.pause()
+        audio.removeAttribute('src')
+        delete audio.dataset.path
+      } else if (audio.dataset.path !== currentPath) {
+        audio.dataset.path = currentPath
+        audio.src = mediaTrackUrl(currentPath)
+      }
+    }
     if (advanceRef.current) {
       advanceRef.current = false
       return
     }
     setPlaying(false)
   }, [currentPath])
+
+  useEffect(() => {
+    const audio = audioRef.current
+    if (!audio) return
+    audio.volume = (muted ? 0 : volume) / 100
+  }, [muted, volume])
+
+  useEffect(() => {
+    const audio = audioRef.current
+    if (!audio) return
+    let cancelled = false
+    const start = () => {
+      if (cancelled) return
+      void audio.play().catch(() => {
+        if (!cancelled) setPlaying(false)
+      })
+    }
+    if (!playing || hidden || !currentPath) {
+      audio.pause()
+      return
+    }
+    if (audio.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) start()
+    else audio.addEventListener('canplay', start, { once: true })
+    return () => {
+      cancelled = true
+      audio.removeEventListener('canplay', start)
+    }
+  }, [playing, hidden, currentPath])
+
+  useEffect(() => {
+    const audio = audioRef.current
+    if (!audio) return
+    const restart = () => {
+      audio.currentTime = 0
+      positionRef.current = 0
+      secondRef.current = -1
+      paintRef.current(0, totalRef.current)
+      void audio.play().catch(() => setPlaying(false))
+    }
+    const onMeta = () => {
+      const ms = Number.isFinite(audio.duration) ? Math.round(audio.duration * 1000) : 0
+      setHeardMs(ms)
+    }
+    const onEnd = () => {
+      if (seekingRef.current || holdMs.current != null) return
+      if (repeat === 'one') {
+        restart()
+        return
+      }
+      const next = repeat === 'all' || shuffle ? nextPath(currentPath, shuffle) : null
+      if (next && next !== currentPath) {
+        advanceRef.current = true
+        select(next, 'single')
+        return
+      }
+      if (next && repeat !== 'off') {
+        restart()
+        return
+      }
+      positionRef.current = totalRef.current
+      paintRef.current(totalRef.current, totalRef.current)
+      setPlaying(false)
+    }
+    const onError = () => {
+      if (!currentPath || audio.dataset.path !== currentPath || failedRef.current === currentPath) return
+      if (audio.error?.code === MediaError.MEDIA_ERR_ABORTED) return
+      failedRef.current = currentPath
+      setPlaying(false)
+      useEditor.getState().notify({ kind: 'err', text: getPack().playFail })
+    }
+    audio.addEventListener('loadedmetadata', onMeta)
+    audio.addEventListener('ended', onEnd)
+    audio.addEventListener('error', onError)
+    return () => {
+      audio.removeEventListener('loadedmetadata', onMeta)
+      audio.removeEventListener('ended', onEnd)
+      audio.removeEventListener('error', onError)
+    }
+  }, [currentPath, repeat, shuffle, select])
 
   const playCommand = useEditor((state) => state.playCommand)
   const playSeen = useRef(0)
@@ -115,13 +238,16 @@ export function Player({ hidden = false }: { hidden?: boolean }) {
       return
     }
     if (currentPath !== playCommand.path) return
-    if (durationMs > 0 && positionRef.current >= durationMs - 50) {
+    const audio = audioRef.current
+    const end = totalRef.current
+    if (audio && (audio.ended || (end > 0 && positionRef.current >= end - 50))) {
+      audio.currentTime = 0
       positionRef.current = 0
       secondRef.current = -1
-      paintRef.current(0, durationMs)
+      paintRef.current(0, end)
     }
     setPlaying(true)
-  }, [playCommand, currentPath, durationMs])
+  }, [playCommand, currentPath])
 
   useEffect(() => {
     const path = playing && currentPath ? currentPath : null
@@ -129,55 +255,76 @@ export function Player({ hidden = false }: { hidden?: boolean }) {
   }, [playing, currentPath])
 
   useEffect(() => {
-    if (!playing || durationMs <= 0) return
-    let last = performance.now()
+    if (!playing) return
     let frame = 0
-    const tick = (now: number) => {
-      const next = positionRef.current + (now - last)
-      last = now
-      if (seekingRef.current) {
-        last = now
-        frame = requestAnimationFrame(tick)
-        return
+    const tick = () => {
+      const audio = audioRef.current
+      if (audio && !seekingRef.current && !audio.paused) {
+        const held = holdMs.current
+        const actual = audio.currentTime * 1000
+        const ms = held != null && Math.abs(actual - held) > 400 ? held : actual
+        if (held != null && ms === actual) holdMs.current = null
+        positionRef.current = ms
+        paintRef.current(ms, totalRef.current)
       }
-      if (next >= durationMs) {
-        if (repeat === 'one') {
-          positionRef.current = 0
-          paintRef.current(0, durationMs)
-          frame = requestAnimationFrame(tick)
-          return
-        }
-        if (repeat === 'all') {
-          const state = useEditor.getState()
-          const order = state.tracks.map((track) => track.path)
-          const current = currentPath || null
-          const index = current ? order.indexOf(current) : -1
-          const following = order.length ? order[(Math.max(index, 0) + 1) % order.length] : null
-          if (following && following !== current) {
-            advanceRef.current = true
-            select(following, 'single')
-            return
-          }
-          positionRef.current = 0
-          paintRef.current(0, durationMs)
-          frame = requestAnimationFrame(tick)
-          return
-        }
-        positionRef.current = durationMs
-        paintRef.current(durationMs, durationMs)
-        setPlaying(false)
-        return
-      }
-      positionRef.current = next
-      paintRef.current(next, durationMs)
       frame = requestAnimationFrame(tick)
     }
     frame = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(frame)
-  }, [playing, durationMs, repeat, currentPath, select])
+  }, [playing])
+
+  const moveSeek = (clientX: number) => {
+    const bar = barRef.current
+    const total = totalRef.current
+    if (!bar || total <= 0) return
+    const rect = bar.getBoundingClientRect()
+    const ratio = rect.width <= 0 ? 0 : Math.min(1, Math.max(0, (clientX - rect.left) / rect.width))
+    const next = ratio * total
+    positionRef.current = next
+    secondRef.current = -1
+    paintRef.current(next, total)
+    const seek = seekRef.current
+    if (seek) {
+      const value = String(next)
+      if (seek.value !== value) seek.value = value
+    }
+    return next
+  }
+
+  const applySeek = (ms: number) => {
+    const audio = audioRef.current
+    if (!audio || !Number.isFinite(audio.duration) || audio.duration <= 0) return
+    const seconds = Math.min(Math.max(0, audio.duration - 0.05), Math.max(0, ms / 1000))
+    holdMs.current = seconds * 1000
+    if (Math.abs(audio.currentTime - seconds) < 0.03) {
+      holdMs.current = null
+      return
+    }
+    try {
+      audio.currentTime = seconds
+    } catch {
+      holdMs.current = null
+    }
+  }
+
+  const step = (direction: 1 | -1) => {
+    const before = currentPath
+    if (shuffle && direction === 1) {
+      const next = before ? nextPath(before, true) : null
+      if (!next || next === before) return
+      if (playing) advanceRef.current = true
+      select(next, 'single')
+      return
+    }
+    selectDelta(direction)
+    const picked = useEditor.getState().selected
+    const after = picked.length === 1 ? picked[0] : ''
+    if (playing && after && after !== before) advanceRef.current = true
+  }
 
   return (
     <footer className={hidden ? 'player player-off' : 'player'} aria-label={pack.player} aria-hidden={hidden || undefined} inert={hidden ? true : undefined}>
+      <audio ref={audioRef} preload="auto" />
       <div className="player-art">
         {cover ? <img alt="" src={coverSrc(cover.mime, cover.dataBase64)} /> : (
           <span className="player-art-empty">
@@ -189,20 +336,22 @@ export function Player({ hidden = false }: { hidden?: boolean }) {
         <button type="button" className={shuffle ? 'icon-btn player-aux on' : 'icon-btn player-aux'} aria-label={pack.shuffle} aria-pressed={shuffle} disabled={!trackCount} onClick={() => setShuffle((on) => !on)}>
           <ShuffleIcon />
         </button>
-        <button type="button" className="icon-btn player-skip" aria-label={pack.prevFile} disabled={!trackCount || saving} onClick={() => selectDelta(-1)}>
+        <button type="button" className="icon-btn player-skip" aria-label={pack.prevFile} disabled={!trackCount || saving} onClick={() => step(-1)}>
           <SkipPrevIcon />
         </button>
         <button type="button" className={playing ? 'icon-btn player-play on' : 'icon-btn player-play'} aria-label={playing ? pack.pause : pack.play} aria-pressed={playing} disabled={!trackCount || saving || pickedCount !== 1} onClick={() => {
-          if (!playing && durationMs > 0 && positionRef.current >= durationMs) {
+          if (!playing && totalMs > 0 && positionRef.current >= totalMs) {
+            const audio = audioRef.current
+            if (audio) audio.currentTime = 0
             positionRef.current = 0
             secondRef.current = -1
-            paintRef.current(0, durationMs)
+            paintRef.current(0, totalMs)
           }
           setPlaying((on) => !on)
         }}>
           {playing ? <PauseIcon /> : <PlayIcon />}
         </button>
-        <button type="button" className="icon-btn player-skip" aria-label={pack.nextFile} disabled={!trackCount || saving} onClick={() => selectDelta(1)}>
+        <button type="button" className="icon-btn player-skip" aria-label={pack.nextFile} disabled={!trackCount || saving} onClick={() => step(1)}>
           <SkipNextIcon />
         </button>
         <button type="button" className={repeat === 'off' ? 'icon-btn player-aux' : 'icon-btn player-aux on'} aria-label={repeatLabel} aria-pressed={repeat !== 'off'} disabled={!trackCount} onClick={() => setRepeat((mode) => mode === 'off' ? 'all' : mode === 'all' ? 'one' : 'off')}>
@@ -212,10 +361,35 @@ export function Player({ hidden = false }: { hidden?: boolean }) {
       <label className="player-seek">
         <span ref={elapsedRef}>0:00</span>
         <span
+          ref={barRef}
           className={seeking ? 'player-bar hot' : 'player-bar'}
           onMouseLeave={() => {
             if (seekingRef.current) return
             seekRef.current?.blur()
+          }}
+          onPointerDown={(event) => {
+            if (!totalRef.current || event.button !== 0) return
+            seekingRef.current = true
+            setSeeking(true)
+            event.currentTarget.setPointerCapture(event.pointerId)
+            moveSeek(event.clientX)
+          }}
+          onPointerMove={(event) => {
+            if (!seekingRef.current || !event.currentTarget.hasPointerCapture(event.pointerId)) return
+            moveSeek(event.clientX)
+          }}
+          onPointerUp={(event) => {
+            if (!event.currentTarget.hasPointerCapture(event.pointerId)) return
+            const next = moveSeek(event.clientX)
+            if (next != null) applySeek(next)
+            seekingRef.current = false
+            setSeeking(false)
+            event.currentTarget.releasePointerCapture(event.pointerId)
+          }}
+          onPointerCancel={(event) => {
+            seekingRef.current = false
+            setSeeking(false)
+            if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
           }}
         >
           <span className="player-bar-track">
@@ -226,30 +400,24 @@ export function Player({ hidden = false }: { hidden?: boolean }) {
             ref={seekRef}
             type="range"
             min={0}
-            max={Math.max(durationMs, 1)}
+            max={Math.max(totalMs, 1)}
             step="any"
             defaultValue={0}
-            disabled={!durationMs}
+            disabled={!totalMs}
             aria-label={pack.position}
-            onPointerDown={(event) => {
+            onKeyDown={() => {
               seekingRef.current = true
-              setSeeking(true)
-              event.currentTarget.setPointerCapture(event.pointerId)
             }}
-            onPointerUp={(event) => {
+            onKeyUp={() => {
               seekingRef.current = false
-              setSeeking(false)
-              event.currentTarget.blur()
-            }}
-            onLostPointerCapture={() => {
-              seekingRef.current = false
-              setSeeking(false)
             }}
             onInput={(event) => {
               const next = Number(event.currentTarget.value)
+              if (!Number.isFinite(next)) return
               positionRef.current = next
               secondRef.current = -1
-              paintRef.current(next, durationMs)
+              paintRef.current(next, totalRef.current)
+              applySeek(next)
             }}
           />
         </span>

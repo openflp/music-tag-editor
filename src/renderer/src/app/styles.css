@@ -1593,6 +1593,8 @@ label.menu-item { cursor: pointer; }
   z-index: 5;
 }
 
+.player audio { display: none; }
+
 .player {
   position: absolute;
   z-index: 8;
@@ -1742,6 +1744,8 @@ label.menu-item { cursor: pointer; }
   position: relative;
   display: block;
   height: 16px;
+  touch-action: none;
+  cursor: pointer;
 }
 
 .player-bar-track {
@@ -1753,6 +1757,7 @@ label.menu-item { cursor: pointer; }
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.16);
   overflow: hidden;
+  pointer-events: none;
 }
 
 .player-bar-fill {
@@ -1790,6 +1795,7 @@ label.menu-item { cursor: pointer; }
 
 .player-bar input[type='range'] {
   position: absolute;
+  z-index: 1;
   inset: 0;
   width: 100%;
   height: 100%;
@@ -1799,10 +1805,17 @@ label.menu-item { cursor: pointer; }
   cursor: pointer;
 }
 
+.player-seek .player-bar input[type='range'] { pointer-events: none; }
+
+.player-bar input[type='range']::-webkit-slider-runnable-track {
+  height: 16px;
+  background: transparent;
+}
+
 .player-bar input[type='range']::-webkit-slider-thumb {
   appearance: none;
-  width: 0;
-  height: 0;
+  width: 16px;
+  height: 16px;
   opacity: 0;
 }
 
@@ -3811,7 +3824,7 @@ label.menu-item { cursor: pointer; }
   padding: 0 8px 0 0;
   border: 1px solid var(--input-line);
   border-radius: 8px;
-  background: var(--input);
+  background: transparent;
   color: var(--muted);
   box-sizing: border-box;
 }
