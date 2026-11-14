@@ -25,6 +25,20 @@ export function formatRate(hz: number): string {
   return `${(hz / 1000).toFixed(1)} ${getPack().unitKhz}`
 }
 
+export function formatBitrate(value: number): string {
+  if (!value) return ''
+  const kbps = value >= 10000 ? Math.round(value / 1000) : Math.round(value)
+  return `${kbps} kbps`
+}
+
+export function formatStamp(ms: number, locale: string): string {
+  if (!ms) return ''
+  const date = new Date(ms)
+  if (Number.isNaN(date.getTime())) return ''
+  const lang = locale === 'en' ? 'en' : 'ru'
+  return new Intl.DateTimeFormat(lang, { dateStyle: 'medium', timeStyle: 'short' }).format(date)
+}
+
 export function formatBadge(extension: string): string {
   return extension.replace('.', '').toUpperCase() || '—'
 }

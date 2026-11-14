@@ -1,6 +1,6 @@
 import { statSync } from 'node:fs'
 import { extname, resolve } from 'node:path'
-import { AUDIO_EXTENSIONS, IMAGE_EXTENSIONS, MAX_COVER_BYTES, MAX_FILES, MENU_BAR_MODES, REPOSITORY_URL, ZOOM_STEPS, type AppSettings, type CoverArt, type MenuBarMode, type WriteJob, type ZoomStep } from '@shared/types'
+import { AUDIO_EXTENSIONS, IMAGE_EXTENSIONS, MAX_COVER_BYTES, MAX_FILES, MAX_LYRICS_CHARS, MENU_BAR_MODES, REPOSITORY_URL, ZOOM_STEPS, type AppSettings, type CoverArt, type MenuBarMode, type WriteJob, type ZoomStep } from '@shared/types'
 
 const AUDIO = new Set<string>(AUDIO_EXTENSIONS)
 const IMAGES = new Set<string>(IMAGE_EXTENSIONS)
@@ -122,9 +122,9 @@ function assertOptionalNumber(value: unknown, label: string): void {
   }
 }
 
-function assertOptionalString(value: unknown, label: string): void {
+function assertOptionalString(value: unknown, label: string, max = 4000): void {
   if (value === undefined) return
-  if (typeof value !== 'string' || value.length > 4000) throw new InputError(`Поле «${label}» слишком длинное`)
+  if (typeof value !== 'string' || value.length > max) throw new InputError(`Поле «${label}» слишком длинное`)
 }
 
 export function assertWriteJob(value: unknown): WriteJob {
@@ -140,6 +140,7 @@ export function assertWriteJob(value: unknown): WriteJob {
   assertOptionalString(patch.albumArtist, 'исполнитель альбома')
   assertOptionalString(patch.genre, 'жанр')
   assertOptionalString(patch.comment, 'комментарий')
+  assertOptionalString(patch.lyrics, 'текст', MAX_LYRICS_CHARS)
   assertOptionalNumber(patch.year, 'год')
   assertOptionalNumber(patch.trackNumber, 'номер трека')
   assertOptionalNumber(patch.trackTotal, 'число треков')

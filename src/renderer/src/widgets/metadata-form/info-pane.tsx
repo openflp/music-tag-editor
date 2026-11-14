@@ -1,11 +1,13 @@
 import { useState } from 'react'
-import { baseName, formatBadge, formatBytes, formatDuration, formatRate } from '@/entities/track/lib'
+import { baseName, formatBadge, formatBitrate, formatBytes, formatDuration, formatRate, formatStamp } from '@/entities/track/lib'
 import { useEditor, type TrackVm } from '@/features/editor/model/store'
 import { camelotOf } from '@shared/key'
+import type { Pack } from '@shared/i18n'
+import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from '@/components/ui/context-menu'
 import { Hint } from '@/components/ui/tooltip'
 import { AxisScroll } from '@/shared/ui/axis-scroll'
-import { CheckIcon, CopyIcon, DownloadIcon, FolderIcon, OpenExternalIcon } from '@/shared/ui/icons'
-import { getPack, useI18n } from '@/shared/i18n'
+import { CheckIcon, CopyIcon, DownloadIcon, FileIcon, FolderIcon, FolderOutIcon, OpenExternalIcon } from '@/shared/ui/icons'
+import { getPack, menuLocaleOf, useI18n } from '@/shared/i18n'
 
 interface InfoRow {
   label: string
@@ -19,11 +21,203 @@ function uniform(values: string[]): string {
   return new Set(filled).size === 1 ? filled[0] : getPack().mixedShort
 }
 
-function channels(count: number): string {
+const TAG_LABELS: Record<string, keyof Pack> = {
+  TIT2: 'fieldTitle',
+  TITLE: 'fieldTitle',
+  INAM: 'fieldTitle',
+  '\u00A9NAM': 'fieldTitle',
+  TPE1: 'fieldArtist',
+  ARTIST: 'fieldArtist',
+  IART: 'fieldArtist',
+  '\u00A9ART': 'fieldArtist',
+  TALB: 'fieldAlbum',
+  ALBUM: 'fieldAlbum',
+  '\u00A9ALB': 'fieldAlbum',
+  TPE2: 'fieldAlbumArtist',
+  ALBUMARTIST: 'fieldAlbumArtist',
+  'ALBUM ARTIST': 'fieldAlbumArtist',
+  AART: 'fieldAlbumArtist',
+  TCON: 'fieldGenre',
+  GENRE: 'fieldGenre',
+  IGNR: 'fieldGenre',
+  '\u00A9GEN': 'fieldGenre',
+  TDRC: 'fieldYear',
+  TYER: 'fieldYear',
+  DATE: 'fieldYear',
+  YEAR: 'fieldYear',
+  ICRD: 'fieldYear',
+  '\u00A9DAY': 'fieldYear',
+  TRCK: 'fieldTrack',
+  TRACKNUMBER: 'fieldTrack',
+  TRACK: 'fieldTrack',
+  TRKN: 'fieldTrack',
+  TPOS: 'fieldDisc',
+  DISCNUMBER: 'fieldDisc',
+  DISC: 'fieldDisc',
+  DISK: 'fieldDisc',
+  COMM: 'comment',
+  COMMENT: 'comment',
+  ICMT: 'comment',
+  DESCRIPTION: 'infoDescription',
+  '\u00A9CMT': 'comment',
+  USLT: 'infoLyrics',
+  LYRICS: 'infoLyrics',
+  '\u00A9LYR': 'infoLyrics',
+  TCOM: 'infoComposer',
+  COMPOSER: 'infoComposer',
+  IWRI: 'infoComposer',
+  '\u00A9WRT': 'infoComposer',
+  TPE3: 'infoConductor',
+  CONDUCTOR: 'infoConductor',
+  '\u00A9CON': 'infoConductor',
+  TPE4: 'infoRemix',
+  REMIXEDBY: 'infoRemix',
+  REMIXER: 'infoRemix',
+  TIT3: 'infoSubtitle',
+  SUBTITLE: 'infoSubtitle',
+  TXXX: 'infoDescription',
+  TDES: 'infoDescription',
+  TIT1: 'infoGrouping',
+  GROUPING: 'infoGrouping',
+  CONTENTGROUP: 'infoGrouping',
+  '\u00A9GRP': 'infoGrouping',
+  TCOP: 'infoCopyright',
+  COPYRIGHT: 'infoCopyright',
+  ICOP: 'infoCopyright',
+  '\u00A9CPY': 'infoCopyright',
+  TPUB: 'infoPublisher',
+  PUBLISHER: 'infoPublisher',
+  ORGANIZATION: 'infoPublisher',
+  LABEL: 'infoPublisher',
+  TENC: 'infoEncoder',
+  TSSE: 'infoEncoder',
+  ENCODER: 'infoEncoder',
+  'ENCODED-BY': 'infoEncoder',
+  ENCODEDBY: 'infoEncoder',
+  'ENCODED BY': 'infoEncoder',
+  '\u00A9TOO': 'infoEncoder',
+  '\u00A9ENC': 'infoEncoder',
+  TKEY: 'infoKey',
+  INITIALKEY: 'infoKey',
+  TLAN: 'infoLanguage',
+  LANGUAGE: 'infoLanguage',
+  TMOO: 'infoMood',
+  MOOD: 'infoMood',
+  TEXT: 'infoLyricist',
+  LYRICIST: 'infoLyricist',
+  TSOT: 'infoTitleSort',
+  TITLESORT: 'infoTitleSort',
+  TSOP: 'infoArtistSort',
+  ARTISTSORT: 'infoArtistSort',
+  TSOA: 'infoAlbumSort',
+  ALBUMSORT: 'infoAlbumSort',
+  TSO2: 'infoAlbumArtistSort',
+  ALBUMARTISTSORT: 'infoAlbumArtistSort',
+  TSOC: 'infoComposerSort',
+  COMPOSERSORT: 'infoComposerSort',
+  TMCL: 'infoPeople',
+  TIPL: 'infoPeople',
+  REPLAYGAIN_TRACK_GAIN: 'infoReplayTrack',
+  REPLAYGAIN_ALBUM_GAIN: 'infoReplayAlbum',
+  TCMP: 'infoCompilation',
+  COMPILATION: 'infoCompilation',
+  CPIL: 'infoCompilation'
+}
+
+function channels(track: TrackVm): string {
   const pack = getPack()
+  const count = track.tech.channels ?? 0
+  if (track.tech.channelMode === 'joint') return `2, ${pack.jointStereo}`
+  if (track.tech.channelMode === 'dual') return `2, ${pack.dualChannel}`
   if (count === 1) return `1, ${pack.mono}`
   if (count === 2) return `2, ${pack.stereo}`
   return count ? String(count) : ''
+}
+
+function factId(key: string): string {
+  return key.startsWith('tag.') ? key.slice(4).replace(/^TXXX:/i, '') : key
+}
+
+function factLabel(key: string, pack: Pack): string {
+  const id = factId(key)
+  const mapped = TAG_LABELS[id.toUpperCase()]
+  if (mapped) {
+    const value = pack[mapped]
+    if (typeof value === 'string') return value
+  }
+  if (id.toUpperCase() === 'TBPM' || id.toUpperCase() === 'BPM' || id.toUpperCase() === 'TEMPO' || id.toUpperCase() === 'TMPO') return 'BPM'
+  if (id.toUpperCase() === 'TSRC' || id.toUpperCase() === 'ISRC') return 'ISRC'
+  return id
+}
+
+const HIDDEN_TAGS = new Set([
+  'COMM',
+  'COMMENT',
+  'ICMT',
+  '\u00A9CMT',
+  'USLT',
+  'LYRICS',
+  '\u00A9LYR',
+  'UNSYNCEDLYRICS'
+])
+
+const SUMMARY_TAGS = new Set([
+  'TBPM',
+  'BPM',
+  'TEMPO',
+  'TMPO',
+  'TKEY',
+  'INITIALKEY',
+  'KEY',
+  'INITIAL KEY',
+  'TENC',
+  'TSSE',
+  'ENCODER',
+  'ENCODED-BY',
+  'ENCODEDBY',
+  'ENCODED BY',
+  '\u00A9TOO',
+  '\u00A9ENC'
+])
+
+function tagId(key: string): string {
+  return factId(key).toUpperCase()
+}
+
+function fromFacts(track: TrackVm, ids: string[]): string {
+  const want = new Set(ids)
+  for (const fact of track.tech.facts ?? []) {
+    if (!want.has(tagId(fact.key))) continue
+    const text = fact.value.trim()
+    if (text) return text
+  }
+  return ''
+}
+
+function bpmOf(track: TrackVm): string {
+  if (track.tech.bpm) return String(track.tech.bpm)
+  const raw = fromFacts(track, ['TBPM', 'BPM', 'TEMPO', 'TMPO'])
+  const value = Number(raw.replace(',', '.'))
+  return Number.isFinite(value) && value > 0 ? String(Math.round(value)) : ''
+}
+
+function keyOf(track: TrackVm): string {
+  const stored = track.tech.key?.trim()
+  if (stored) return stored
+  return fromFacts(track, ['TKEY', 'INITIALKEY', 'KEY', 'INITIAL KEY'])
+}
+
+function encoderOf(track: TrackVm): string {
+  const stored = track.tech.encoder?.trim()
+  if (stored) return stored
+  return fromFacts(track, ['TENC', 'TSSE', 'ENCODER', 'ENCODED-BY', 'ENCODEDBY', 'ENCODED BY', '\u00A9TOO', '\u00A9ENC'])
+}
+
+function shownFact(key: string, value: string, pack: Pack): string {
+  const id = factId(key).toUpperCase()
+  if ((id === 'TCMP' || id === 'COMPILATION' || id === 'CPIL') && (value === '1' || value.toLowerCase() === 'true')) return pack.yes
+  if ((id === 'USLT' || id === 'LYRICS' || id.includes('LYRIC')) && value.length > 160) return preview(value)
+  return value
 }
 
 function preview(text: string): string {
@@ -31,42 +225,62 @@ function preview(text: string): string {
   return line.length > 160 ? `${line.slice(0, 160)}…` : line
 }
 
-function rowsOf(tracks: TrackVm[]): InfoRow[] {
+function rowsOf(tracks: TrackVm[], locale: string): InfoRow[] {
   const pack = getPack()
   const one = tracks.length === 1 ? tracks[0] : null
   const cell = (read: (track: TrackVm) => string) => uniform(tracks.map(read))
   const row = (label: string, value: string, copy = value): InfoRow => ({ label, value, copy })
+  const sameText = (left: string, right: string) => left.trim().toLowerCase() === right.trim().toLowerCase()
+  const codec = cell((track) => track.tech.codec ?? '')
+  const container = cell((track) => track.tech.container ?? '')
   const always: InfoRow[] = [
+    row(pack.infoName, cell((track) => baseName(track.path))),
     one
       ? row(pack.infoPath, one.path)
       : row(pack.infoFiles, String(tracks.length), tracks.map((track) => track.path).join('\n')),
-    row(pack.infoFormat, cell((track) => formatBadge(track.format))),
-    row(pack.infoCodec, cell((track) => track.tech.codec ?? '')),
-    row(pack.infoDuration, cell((track) => formatDuration(track.tech.durationMs))),
-    row(pack.infoBitrate, cell((track) => (track.tech.bitrate ? `${Math.round(track.tech.bitrate / 1000)} kbps` : ''))),
-    row(pack.infoRate, cell((track) => formatRate(track.tech.sampleRate))),
-    row(pack.infoChannels, cell((track) => channels(track.tech.channels ?? 0))),
-    row(pack.infoBits, cell((track) => (track.tech.bitsPerSample ? `${track.tech.bitsPerSample} ${pack.bits}` : ''))),
     row(pack.infoSize, cell((track) => (track.tech.size ? formatBytes(track.tech.size) : ''))),
-    row('BPM', cell((track) => (track.tech.bpm ? String(track.tech.bpm) : ''))),
-    row(pack.infoKey, cell((track) => track.tech.key ?? '')),
-    row('Camelot', cell((track) => camelotOf(track.tech.key ?? ''))),
-    row(pack.infoEncoder, cell((track) => track.tech.encoder ?? ''))
+    row(pack.infoCreated, cell((track) => formatStamp(track.tech.createdMs, locale))),
+    row(pack.infoModified, cell((track) => formatStamp(track.tech.modifiedMs, locale))),
+    row(pack.infoFormat, cell((track) => formatBadge(track.format))),
+    row(pack.infoContainer, sameText(container, codec) ? '' : container),
+    row(pack.infoCodec, codec),
+    row(pack.infoDuration, cell((track) => formatDuration(track.tech.durationMs))),
+    row(pack.infoBitrate, cell((track) => formatBitrate(track.tech.bitrate))),
+    row(pack.infoRate, cell((track) => formatRate(track.tech.sampleRate))),
+    row(pack.infoChannels, cell(channels)),
+    row(pack.infoBits, cell((track) => (track.tech.bitsPerSample ? `${track.tech.bitsPerSample} ${pack.bits}` : ''))),
+    row(pack.infoLossless, cell((track) => (track.tech.codec || track.format ? (track.tech.lossless ? pack.yes : pack.no) : ''))),
+    row(pack.infoTagTypes, cell((track) => track.tech.tagTypes ?? '')),
+    row('BPM', cell(bpmOf)),
+    row(pack.infoKey, cell(keyOf)),
+    row('Camelot', cell((track) => camelotOf(keyOf(track)))),
+    row(pack.infoEncoder, cell(encoderOf))
   ]
-  const extra: InfoRow[] = [
-    row(pack.infoComposer, cell((track) => track.tech.composer ?? '')),
-    row(pack.infoPublisher, cell((track) => track.tech.publisher ?? '')),
-    row(pack.infoConductor, cell((track) => track.tech.conductor ?? '')),
-    row(pack.infoRemix, cell((track) => track.tech.remix ?? '')),
-    row(pack.infoSubtitle, cell((track) => track.tech.subtitle ?? '')),
-    row(pack.infoGrouping, cell((track) => track.tech.grouping ?? '')),
-    row(pack.infoCopyright, cell((track) => track.tech.copyright ?? '')),
-    row('ISRC', cell((track) => track.tech.isrc ?? '')),
-    row('MusicBrainz', cell((track) => track.tech.musicBrainz ?? '')),
-    row('ReplayGain', cell((track) => track.tech.replayGain ?? '')),
-    row(pack.infoLyrics, cell((track) => preview(track.tech.lyrics ?? '')), cell((track) => track.tech.lyrics ?? ''))
-  ].filter((item) => item.value)
-  return [...always, ...extra]
+  const keys: string[] = []
+  for (const track of tracks) {
+    for (const fact of track.tech.facts ?? []) {
+      if (!fact.key.startsWith('tag.') || !fact.value.trim() || keys.includes(fact.key)) continue
+      const id = tagId(fact.key)
+      if (HIDDEN_TAGS.has(id) || SUMMARY_TAGS.has(id)) continue
+      keys.push(fact.key)
+    }
+  }
+  const tags: InfoRow[] = keys
+    .map((key) => {
+      const copy = cell((track) => track.tech.facts?.find((fact) => fact.key === key)?.value ?? '')
+      const label = factLabel(key, pack)
+      return row(label, shownFact(key, copy, pack), copy)
+    })
+    .filter((item) => item.copy && item.copy !== pack.mixedShort)
+  const summary = always.filter((item) => item.label !== pack.infoContainer || item.value)
+  const seen = new Set(summary.filter((item) => item.value).map((item) => `${item.label}\n${item.copy}`))
+  const extra = tags.filter((item) => {
+    const signature = `${item.label}\n${item.copy}`
+    if (seen.has(signature)) return false
+    seen.add(signature)
+    return true
+  })
+  return [...summary, ...extra]
 }
 
 function report(items: InfoRow[]): string {
@@ -94,7 +308,7 @@ function CopyButton({ text, label }: { text: string; label: string }) {
             setCopied(true)
             window.setTimeout(() => setCopied(false), 1600)
           })
-          .catch(() => notify({ kind: 'err', text: 'Не удалось скопировать' }))
+          .catch(() => notify({ kind: 'err', text: pack.copyFail }))
       }}
     >
       <span className="copy-swap-icon copy">
@@ -107,22 +321,31 @@ function CopyButton({ text, label }: { text: string; label: string }) {
   )
 }
 
+function canCopy(text: string, mixed: string): boolean {
+  return Boolean(text) && text !== mixed
+}
+
 export function InfoPane({ tracks }: { tracks: TrackVm[] }) {
-  const { pack } = useI18n()
+  const { locale, pack } = useI18n()
   const notify = useEditor((state) => state.notify)
   const reveal = useEditor((state) => state.revealCurrent)
   const open = useEditor((state) => state.openCurrent)
-  const items = rowsOf(tracks)
+  const [rowIndex, setRowIndex] = useState<number | null>(null)
+  const items = rowsOf(tracks, menuLocaleOf(locale))
   const text = report(items)
   const single = tracks.length === 1
+  const row = rowIndex === null ? null : items[rowIndex] ?? null
+  const copyText = (value: string) => {
+    void navigator.clipboard.writeText(value).catch(() => notify({ kind: 'err', text: pack.copyFail }))
+  }
   const exportInfo = () => {
     const name = `${baseName(tracks[0]?.path || 'info').replace(/\.[^.]+$/, '')}.txt`
     void window.musicTagEditor
       ?.saveText({ text, name })
       .then((saved) => {
-        if (saved) notify({ kind: 'ok', text: 'Сведения экспортированы' })
+        if (saved) notify({ kind: 'ok', text: pack.exported })
       })
-      .catch(() => notify({ kind: 'err', text: 'Не удалось экспортировать' }))
+      .catch(() => notify({ kind: 'err', text: pack.exportFail }))
   }
   return (
     <div className="info-pane">
@@ -149,19 +372,63 @@ export function InfoPane({ tracks }: { tracks: TrackVm[] }) {
           </Hint>
         </div>
       </div>
-      <AxisScroll className="info-scroll" watch={`${tracks.map((track) => track.path).join('\n')}:${items.length}`} shade>
-        {(ref) => (
-          <div ref={ref} className="prop-table">
-            {items.map((item) => (
-              <div className="prop-row" key={item.label}>
-                <span>{item.label}</span>
-                <b>{item.value || '—'}</b>
-                <CopyButton text={item.copy} label={pack.copyItem(item.label)} />
+      <ContextMenu onOpenChange={(open) => { if (!open) setRowIndex(null) }}>
+        <AxisScroll className="info-scroll" watch={`${tracks.map((track) => track.path).join('\n')}:${items.length}`} shade>
+          {(ref) => (
+            <ContextMenuTrigger asChild>
+              <div
+                ref={ref}
+                className="prop-table"
+                onContextMenu={(event) => {
+                  if (!(event.target as HTMLElement).closest('.prop-row')) setRowIndex(null)
+                }}
+              >
+                {items.map((item, index) => {
+                  const ready = canCopy(item.copy, pack.mixedShort)
+                  return (
+                    <div
+                      className={rowIndex === index ? 'prop-row active' : 'prop-row'}
+                      key={`${item.label}:${item.copy}:${index}`}
+                      onContextMenu={() => setRowIndex(index)}
+                    >
+                      <span>{item.label}</span>
+                      <b>{item.value || '—'}{ready ? <CopyButton text={item.copy} label={pack.copyItem(item.label)} /> : null}</b>
+                    </div>
+                  )
+                })}
               </div>
-            ))}
-          </div>
-        )}
-      </AxisScroll>
+            </ContextMenuTrigger>
+          )}
+        </AxisScroll>
+        <ContextMenuContent>
+          <ContextMenuItem disabled={!row || !canCopy(row.copy, pack.mixedShort)} onSelect={() => row && copyText(row.copy)}>
+            <CopyIcon />
+            {pack.copyValue}
+          </ContextMenuItem>
+          <ContextMenuItem disabled={!row || !canCopy(row.copy, pack.mixedShort)} onSelect={() => row && copyText(`${row.label}: ${row.copy}`)}>
+            <CopyIcon />
+            {pack.copyLine}
+          </ContextMenuItem>
+          <ContextMenuItem disabled={!text} onSelect={() => copyText(text)}>
+            <CopyIcon />
+            {pack.copyAll}
+          </ContextMenuItem>
+          <ContextMenuSeparator />
+          <ContextMenuItem disabled={!text} onSelect={exportInfo}>
+            <DownloadIcon />
+            {pack.export}
+          </ContextMenuItem>
+          <ContextMenuSeparator />
+          <ContextMenuItem disabled={!single} onSelect={() => void reveal()}>
+            <FolderOutIcon />
+            {pack.revealFile}
+          </ContextMenuItem>
+          <ContextMenuItem disabled={!single} onSelect={() => void open()}>
+            <FileIcon />
+            {pack.openFile}
+          </ContextMenuItem>
+        </ContextMenuContent>
+      </ContextMenu>
     </div>
   )
 }

@@ -10,10 +10,38 @@ import { TrackSidebar } from '@/widgets/track-sidebar/TrackSidebar'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { CommandPalette, DragOverlay, EmptyStage, SidebarResizer, TitleBar } from '@/widgets/chrome/Chrome'
 import { EditMenu } from '@/widgets/chrome/edit-menu'
-import { readPlayerOpen, readSidebarOpen, writePlayerOpen, writeSidebarOpen } from '@/widgets/chrome/sidebar-layout'
+import {
+  readPlayerOpen,
+  readSidebarOpen,
+  readSidebarWidth,
+  writePlayerOpen,
+  writeSidebarOpen,
+  writeSidebarWidth
+} from '@/widgets/chrome/sidebar-layout'
 import { loadAppSettings } from '@/features/settings/app-settings'
 import { shortcutMatches, syncShortcuts } from '@/features/settings/prefs'
 import { syncLocale } from '@/shared/i18n'
+
+// TODO: move to the i18n packs (needs keys in @/shared/i18n)
+const MSG = {
+  pickTrack: 'Сначала выберите трек',
+  badCover: 'Обложка должна быть изображением',
+  badText: 'Некорректный текст',
+  noPath: 'Не удалось получить путь к файлу',
+  badFormat: 'Формат файла не поддерживается'
+} as const
+
+function dropInfo(data: DataTransfer | null): { files: boolean; mode: DropMode; count: number } {
+  if (!data) return { files: false, mode: 'library', count: 0 }
+  const types = Array.from(data.types)
+  const files = !types.length || types.includes('Files')
+  const items = Array.from(data.items ?? []).filter((item) => item.kind === 'file')
+  const mime = items.map((item) => item.type)
+  let mode: DropMode = 'library'
+  if (mime.length && mime.every((type) => type.startsWith('image/'))) mode = 'cover'
+  else if (mime.length && mime.every((type) => type === 'text/plain')) mode = 'comment'
+  return { files, mode, count: items.length }
+}
 
 export function App() {
   useEditorBindings()
@@ -22,8 +50,9 @@ export function App() {
   const openDialog = useEditor((state) => state.openDialog)
   const openFolder = useEditor((state) => state.openFolder)
   const [dropMode, setDropMode] = useState<DropMode | null>(null)
+  const [dropCount, setDropCount] = useState(0)
   const [palette, setPalette] = useState(false)
-  const [sidebar, setSidebar] = useState(300)
+  const [sidebar, setSidebar] = useState(readSidebarWidth)
   const [sidebarOpen, setSidebarOpen] = useState(readSidebarOpen)
   const [playerOpen, setPlayerOpen] = useState(readPlayerOpen)
 
@@ -40,6 +69,10 @@ export function App() {
   useEffect(() => {
     writePlayerOpen(playerOpen)
   }, [playerOpen])
+
+  useEffect(() => {
+    writeSidebarWidth(sidebar)
+  }, [sidebar])
 
   const playCommand = useEditor((state) => state.playCommand)
   useEffect(() => {
@@ -58,7 +91,10 @@ export function App() {
   }, [])
 
   useEffect(() => {
-    const hide = () => setDropMode(null)
+    const hide = () => {
+      setDropMode(null)
+      setDropCount(0)
+    }
     const onStart = (event: DragEvent) => {
       const target = event.target
       const row = target instanceof Element ? target.closest('.track-row') : null
@@ -71,50 +107,62 @@ export function App() {
       window.musicTagEditor?.dragFiles(group.length ? group : [path])
     }
     const onDragOver = (event: DragEvent) => {
+      const info = dropInfo(event.dataTransfer)
+      // Not a file drag (text into an input, Monaco selection...): leave it to the browser.
+      if (!info.files) return
       event.preventDefault()
       if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy'
-      const types = event.dataTransfer ? Array.from(event.dataTransfer.types) : []
-      if (types.length && !types.includes('Files')) return
-      setDropMode((prev) => (prev === 'library' ? prev : 'library'))
+      setDropMode((prev) => (prev === info.mode ? prev : info.mode))
+      setDropCount((prev) => (prev === info.count ? prev : info.count))
     }
     const onLeave = (event: DragEvent) => {
       const left = event.clientX <= 0 || event.clientY <= 0 || event.clientX >= window.innerWidth || event.clientY >= window.innerHeight
       if (left) hide()
     }
     const onDrop = (event: DragEvent) => {
-      event.preventDefault()
-      hide()
       const files = event.dataTransfer?.files
-      if (!files?.length) return
+      if (!files?.length) {
+        hide()
+        return
+      }
+      event.preventDefault()
       event.stopPropagation()
+      hide()
+      void handleDrop(files)
+    }
+    const handleDrop = async (files: FileList) => {
       const dropped = takeDrop(files)
-      const state = useEditor.getState()
-      if (dropped.library.length) void state.addPaths(dropped.library)
-      const open = state.tracks.some((track) => state.selected.includes(track.path) && !track.error)
-      if (dropped.images[0] || dropped.texts[0]) {
-        if (!open) state.notify({ kind: 'err', text: 'Сначала выберите трек' })
+      const notify = (text: string) => useEditor.getState().notify({ kind: 'err', text })
+      const hasOpenTrack = () => {
+        const state = useEditor.getState()
+        return state.tracks.some((track) => state.selected.includes(track.path) && !track.error)
+      }
+      // Library first, so a cover/comment dropped together with tracks lands on the freshly added selection.
+      if (dropped.library.length) await useEditor.getState().addPaths(dropped.library)
+      const image = dropped.images[0]
+      const text = dropped.texts[0]
+      if (image || text) {
+        if (!hasOpenTrack()) notify(MSG.pickTrack)
         else {
-          const image = dropped.images[0]
-          const text = dropped.texts[0]
           if (image) {
-            void coverFromFile(image)
-              .then((cover) => useEditor.getState().setCover(cover))
-              .catch((error: unknown) => {
-                useEditor.getState().notify({ kind: 'err', text: error instanceof Error ? error.message : 'Обложка должна быть изображением' })
-              })
+            try {
+              useEditor.getState().setCover(await coverFromFile(image))
+            } catch (error: unknown) {
+              notify(error instanceof Error ? error.message : MSG.badCover)
+            }
           }
           if (text) {
-            void commentFromFile(text)
-              .then((value) => useEditor.getState().setField('comment', value))
-              .catch((error: unknown) => {
-                useEditor.getState().notify({ kind: 'err', text: error instanceof Error ? error.message : 'Некорректный текст' })
-              })
+            try {
+              useEditor.getState().setField('comment', await commentFromFile(text))
+            } catch (error: unknown) {
+              notify(error instanceof Error ? error.message : MSG.badText)
+            }
           }
         }
       }
       if (!dropped.library.length && !dropped.images.length && !dropped.texts.length) {
-        if (dropped.missedPath) state.notify({ kind: 'err', text: 'Не удалось получить путь к файлу' })
-        else if (dropped.missedKind) state.notify({ kind: 'err', text: 'Формат файла не поддерживается' })
+        if (dropped.missedPath) notify(MSG.noPath)
+        else if (dropped.missedKind) notify(MSG.badFormat)
       }
     }
     document.addEventListener('dragstart', onStart, true)
@@ -133,35 +181,35 @@ export function App() {
 
   return (
     <TooltipProvider delayDuration={300}>
-    <div className={dropMode ? 'shell over' : 'shell'}>
-      <TitleBar
-        onPalette={() => setPalette(true)}
-        sidebarOpen={sidebarOpen}
-        onToggleSidebar={() => setSidebarOpen((open) => !open)}
-        playerOpen={playerOpen}
-        onTogglePlayer={() => setPlayerOpen((open) => !open)}
-      />
-      <div className={sidebarOpen ? 'workspace' : 'workspace sidebar-closed'}>
-        <TrackSidebar loading={loading} collapsed={!sidebarOpen} />
-        <SidebarResizer width={sidebar} onWidth={setSidebar} collapsed={!sidebarOpen} />
-        <div className="editor">
-          {hasTracks ? (
-            <>
-              <TrackHeader />
-              <MetadataForm />
-            </>
-          ) : (
-            <EmptyStage onOpenFiles={() => void openDialog()} onOpenFolder={() => void openFolder()} />
-          )}
-          <Player hidden={!playerOpen} />
-          <SaveDialogs />
-          <Toast />
+      <div className={dropMode ? 'shell over' : 'shell'}>
+        <TitleBar
+          onPalette={() => setPalette(true)}
+          sidebarOpen={sidebarOpen}
+          onToggleSidebar={() => setSidebarOpen((open) => !open)}
+          playerOpen={playerOpen}
+          onTogglePlayer={() => setPlayerOpen((open) => !open)}
+        />
+        <div className={sidebarOpen ? 'workspace' : 'workspace sidebar-closed'}>
+          <TrackSidebar loading={loading} collapsed={!sidebarOpen} />
+          <SidebarResizer width={sidebar} onWidth={setSidebar} collapsed={!sidebarOpen} />
+          <div className="editor">
+            {hasTracks ? (
+              <>
+                <TrackHeader />
+                <MetadataForm />
+              </>
+            ) : (
+              <EmptyStage onOpenFiles={() => void openDialog()} onOpenFolder={() => void openFolder()} />
+            )}
+            <Player hidden={!playerOpen} />
+            <SaveDialogs />
+            <Toast />
+          </div>
         </div>
+        <DragOverlay mode={dropMode} count={dropCount} />
+        <EditMenu />
+        <CommandPalette open={palette} onClose={() => setPalette(false)} />
       </div>
-      <DragOverlay mode={dropMode} count={0} />
-      <EditMenu />
-      <CommandPalette open={palette} onClose={() => setPalette(false)} />
-    </div>
     </TooltipProvider>
   )
 }

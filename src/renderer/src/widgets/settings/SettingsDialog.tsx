@@ -18,6 +18,7 @@ import {
   setNumberStart,
   setNumberWidth,
   setRememberVolume,
+  setShowFormatBadges,
   chordFromEvent,
   setShortcut,
   shortcutOf,
@@ -46,6 +47,7 @@ const LABEL: Record<ShortcutId, keyof Pack> = {
   prevTab: 'settingsPrevTab',
   tabMain: 'tabMain',
   tabNote: 'tabNote',
+  tabLyrics: 'tabLyrics',
   tabInfo: 'tabInfo',
   tabFile: 'tabFile',
   selectAll: 'selectAll',
@@ -82,7 +84,7 @@ function sectionText(id: SectionId, pack: Pack, extra: string): string {
   }
   if (id === 'writing') return `${pack.settingsWriting} ${pack.settingsConfirmWrite} ${pack.settingsConfirmClose} ${pack.settingsConfirmReset}`
   if (id === 'playback') return `${pack.settingsPlayback} ${pack.settingsRememberVolume} ${pack.settingsThrottle}`
-  return `${pack.settingsSystem} ${pack.settingsMenu} ${pack.settingsMenuIcon} ${pack.settingsMenuBar} ${pack.settingsHardware} ${pack.settingsSpellcheck} ${pack.settingsZoom} ${pack.settingsLogin} ${pack.settingsOnTop} ${pack.settingsRestore}`
+  return `${pack.settingsSystem} ${pack.settingsMenu} ${pack.settingsMenuIcon} ${pack.settingsMenuBar} ${pack.settingsFormatBadges} ${pack.settingsHardware} ${pack.settingsSpellcheck} ${pack.settingsZoom} ${pack.settingsLogin} ${pack.settingsOnTop} ${pack.settingsRestore}`
 }
 
 export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
@@ -402,6 +404,12 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
                     onChange={(mode) => setAppSetting('menuBar', mode)}
                   />
                 </div>
+                <SettingSwitch
+                  title={pack.settingsFormatBadges}
+                  hint={pack.settingsFormatBadgesHint}
+                  on={prefs.showFormatBadges}
+                  onChange={setShowFormatBadges}
+                />
                 <SettingSwitch
                   title={pack.settingsHardware}
                   hint={hardwarePending ? pack.settingsHardwareRestart : pack.settingsHardwareHint}

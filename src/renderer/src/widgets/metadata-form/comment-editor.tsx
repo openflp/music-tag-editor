@@ -74,11 +74,13 @@ export function CommentEditor({
   value,
   mixed,
   disabled,
+  label,
   onChange
 }: {
   value: string
   mixed: boolean
   disabled?: boolean
+  label?: string
   onChange: (value: string) => void
 }) {
   const { locale } = useI18n()
@@ -116,7 +118,7 @@ export function CommentEditor({
       tabSize: 2,
       fixedOverflowWidgets: true,
       contextmenu: false,
-      ariaLabel: getPack().comment,
+      ariaLabel: label || getPack().comment,
       scrollbar: { verticalScrollbarSize: 8, horizontalScrollbarSize: 8 }
     })
     editorRef.current = editor
@@ -145,9 +147,9 @@ export function CommentEditor({
     editor.updateOptions({
       readOnly: Boolean(disabled),
       placeholder: mixed ? getPack().mixed : '',
-      ariaLabel: getPack().comment
+      ariaLabel: label || getPack().comment
     })
-  }, [value, mixed, disabled, locale])
+  }, [value, mixed, disabled, locale, label])
 
   return (
     <div className="note-editor" data-no-track-nav="">

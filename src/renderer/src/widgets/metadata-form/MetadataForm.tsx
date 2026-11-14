@@ -18,12 +18,13 @@ import { InfoPane } from './info-pane'
 import { getLocale, tr, useI18n } from '@/shared/i18n'
 import type { Pack } from '@shared/i18n'
 
-const SHEET_TABS = ['main', 'note', 'detail', 'file'] as const
+const SHEET_TABS = ['main', 'note', 'lyrics', 'detail', 'file'] as const
 type SheetTab = (typeof SHEET_TABS)[number]
 
 const TAB_SHORTCUT: Record<SheetTab, ShortcutId> = {
   main: 'tabMain',
   note: 'tabNote',
+  lyrics: 'tabLyrics',
   detail: 'tabInfo',
   file: 'tabFile'
 }
@@ -206,6 +207,11 @@ export function MetadataForm() {
   const albumArtist = textField('albumArtist')
   const genre = textField('genre')
   const comment = textField('comment')
+  const lyricsView = uniformField(
+    editable.map((track) => track.draft.lyrics ?? track.tech.lyrics ?? ''),
+    (left, right) => left === right
+  )
+  const lyrics = { mixed: lyricsView.mixed, value: lyricsView.value ?? '' }
   const year = numberField('year')
   const trackNumber = numberField('trackNumber')
   const trackTotal = numberField('trackTotal')
@@ -233,6 +239,7 @@ export function MetadataForm() {
         <TabsList aria-label={pack.tabs} variant="line" className="sheet-tabs">
           <TabsTrigger value="main" className="sheet-tab">{pack.tabMain}</TabsTrigger>
           <TabsTrigger value="note" className="sheet-tab">{pack.tabNote}</TabsTrigger>
+          <TabsTrigger value="lyrics" className="sheet-tab">{pack.tabLyrics}</TabsTrigger>
           <TabsTrigger value="detail" className="sheet-tab">{pack.tabInfo}</TabsTrigger>
           <TabsTrigger value="file" className="sheet-tab">{pack.tabFile}</TabsTrigger>
         </TabsList>
@@ -317,6 +324,12 @@ export function MetadataForm() {
           <span>{pack.comment}</span>
         </div>
         <CommentEditor value={comment.value} mixed={comment.mixed} disabled={disabled} onChange={(value) => setField('comment', value)} />
+      </TabsContent>
+      <TabsContent value="lyrics" className="groups note-pane">
+        <div className="note-head">
+          <span>{pack.infoLyrics}</span>
+        </div>
+        <CommentEditor value={lyrics.value} mixed={lyrics.mixed} disabled={disabled} label={pack.infoLyrics} onChange={(value) => setField('lyrics', value)} />
       </TabsContent>
       <TabsContent value="detail" className="groups info-scroll">
         <InfoPane tracks={editable} />

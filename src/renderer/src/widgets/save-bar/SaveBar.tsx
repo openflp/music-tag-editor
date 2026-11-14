@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
-import { baseName, formatBadge, formatDuration, formatRate } from '@/entities/track/lib'
+import { Popover } from 'radix-ui'
+import { baseName, formatBadge, formatBitrate, formatDuration, formatRate } from '@/entities/track/lib'
 import { draftCount, dirtyCount, editorPlan, historyEntries, useEditor } from '@/features/editor/model/store'
 import { shownTrackTitle, trackDirty } from '@shared/plan'
 import {
@@ -11,6 +12,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { copyTracks } from '@/features/editor/lib/copy'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command'
 import { Hint } from '@/components/ui/tooltip'
 import { AxisScroll } from '@/shared/ui/axis-scroll'
 import { FadeText } from '@/shared/ui/fade-text'
@@ -225,21 +227,31 @@ function HistoryButton({
   onStep: (index: number) => void
   onOnce: () => void
 }) {
+  const { pack } = useI18n()
+  const searchRef = useRef<HTMLInputElement>(null)
   const [open, setOpen] = useState(false)
+  const [query, setQuery] = useState('')
+  const name = label.split(' · ')[0]
   return (
-    <DropdownMenu open={open} onOpenChange={setOpen}>
+    <Popover.Root
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next)
+        setQuery('')
+      }}
+    >
       <Hint label={label} align="end">
-        <DropdownMenuTrigger asChild>
+        <Popover.Anchor asChild>
           <button
             type="button"
             className="icon-btn"
-            aria-label={label.split(' · ')[0]}
+            aria-label={name}
+            aria-expanded={open}
             disabled={disabled}
-            onPointerDown={(event) => {
-              if (event.button === 0) event.preventDefault()
-            }}
             onPointerUp={(event) => {
-              if (event.button === 0 && !disabled) onOnce()
+              if (event.button !== 0 || disabled) return
+              setOpen(false)
+              onOnce()
             }}
             onKeyDown={(event) => {
               if (event.key !== 'Enter' && event.key !== ' ') return
@@ -253,16 +265,49 @@ function HistoryButton({
           >
             {icon}
           </button>
-        </DropdownMenuTrigger>
+        </Popover.Anchor>
       </Hint>
-      <DropdownMenuContent align="end" className="menu-history" aria-label={label.split(' · ')[0]}>
-        {steps.map((step, index) => (
-          <DropdownMenuItem key={`${index}-${step}`} onSelect={() => onStep(index)}>
-            {step}
-          </DropdownMenuItem>
-        ))}
-      </DropdownMenuContent>
-    </DropdownMenu>
+      <Popover.Portal>
+        <Popover.Content
+          className="hist-menu"
+          align="end"
+          sideOffset={6}
+          aria-label={name}
+          data-no-track-nav=""
+          onOpenAutoFocus={(event) => {
+            event.preventDefault()
+            searchRef.current?.focus()
+          }}
+          onCloseAutoFocus={(event) => event.preventDefault()}
+        >
+          <Command>
+            <CommandInput ref={searchRef} onValueChange={setQuery} placeholder={pack.historySearch} aria-label={pack.historySearch} />
+            <AxisScroll watch={`${query}:${steps.length}`}>
+              {(ref) => (
+                <CommandList ref={ref} className="cmd-scroll-body">
+                  <CommandEmpty>{pack.nothingFound}</CommandEmpty>
+                  <CommandGroup>
+                    {steps.map((step, index) => (
+                      <CommandItem
+                        key={`${index}-${step}`}
+                        value={`${index}\u0000${step}`}
+                        keywords={[step]}
+                        onSelect={() => {
+                          onStep(index)
+                          setOpen(false)
+                        }}
+                      >
+                        <span className="hist-value">{step}</span>
+                      </CommandItem>
+                    ))}
+                  </CommandGroup>
+                </CommandList>
+              )}
+            </AxisScroll>
+          </Command>
+        </Popover.Content>
+      </Popover.Portal>
+    </Popover.Root>
   )
 }
 
@@ -319,7 +364,8 @@ export function TrackHeader() {
     if (number) bits.push(`%n% ${number}`)
     const duration = formatDuration(first.tech.durationMs)
     if (duration) bits.push(duration)
-    if (first.tech.bitrate) bits.push(`${Math.round(first.tech.bitrate / 1000)} kbps`)
+    const bitrate = formatBitrate(first.tech.bitrate)
+    if (bitrate) bits.push(bitrate)
     const rate = formatRate(first.tech.sampleRate)
     if (rate) bits.push(rate)
     return bits.join(' · ')
@@ -342,7 +388,7 @@ export function TrackHeader() {
                 </button>
               </DropdownMenuTrigger>
             </Hint>
-            <DropdownMenuContent align="start" className="menu-wide" aria-label={pack.fileOps}>
+            <DropdownMenuContent align="start" aria-label={pack.fileOps}>
               <DropdownMenuItem disabled={saving || !picked.length} onSelect={() => void revealCurrent()}>
                 <FolderOutIcon />
                 {pack.revealFile}

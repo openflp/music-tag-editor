@@ -24,6 +24,14 @@ function state(patch: Partial<PlanState> = {}): PlanState {
 }
 
 describe('buildJob', () => {
+  it('writes lyrics only when they change', () => {
+    const item = track()
+    item.draft = { ...item.draft, lyrics: 'Куплет' }
+    expect(buildJob(item, state())?.patch).toEqual({ lyrics: 'Куплет' })
+    item.original = { ...item.original, lyrics: 'Куплет' }
+    expect(buildJob(item, state())).toBeNull()
+  })
+
   it('skips fields the user did not change', () => {
     const item = track()
     item.draft = { ...item.draft, title: 'Ночь' }

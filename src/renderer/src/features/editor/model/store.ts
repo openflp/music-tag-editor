@@ -169,13 +169,22 @@ function inDir(filePath: string, dir: string): boolean {
   return key === base || key.startsWith(`${base}/`)
 }
 
+function tagsOf(snapshot: TrackSnapshot): TrackTags {
+  return {
+    ...emptyTags(),
+    ...snapshot.tags,
+    lyrics: snapshot.tags.lyrics ?? snapshot.tech.lyrics ?? ''
+  }
+}
+
 function toVm(snapshot: TrackSnapshot): TrackVm {
+  const tags = tagsOf(snapshot)
   return {
     path: snapshot.path,
     format: snapshot.format,
     error: snapshot.error,
-    original: snapshot.tags,
-    draft: { ...snapshot.tags },
+    original: tags,
+    draft: { ...tags },
     originalCover: snapshot.cover,
     draftCover: snapshot.cover,
     tech: snapshot.tech
@@ -280,7 +289,7 @@ function sameCover(left: CoverArt | null | undefined, right: CoverArt | null | u
   return left.mime === right.mime && left.dataBase64 === right.dataBase64
 }
 
-const STEP_FIELDS = ['title', 'artist', 'album', 'albumArtist', 'genre', 'year', 'trackNumber', 'trackTotal', 'discNumber', 'discTotal', 'comment'] as const
+const STEP_FIELDS = ['title', 'artist', 'album', 'albumArtist', 'genre', 'year', 'trackNumber', 'trackTotal', 'discNumber', 'discTotal', 'comment', 'lyrics'] as const
 
 function stepLabel(field: string): string {
   const pack = getPack()
@@ -295,7 +304,8 @@ function stepLabel(field: string): string {
     trackTotal: pack.fieldTrackCount,
     discNumber: pack.fieldDisc,
     discTotal: pack.fieldDiscCount,
-    comment: pack.comment
+    comment: pack.comment,
+    lyrics: pack.infoLyrics
   }
   return labels[field] ?? field
 }
@@ -319,7 +329,8 @@ function previewWords(): PreviewWords {
       trackTotal: pack.fieldTrackCount,
       discNumber: pack.fieldDisc,
       discTotal: pack.fieldDiscCount,
-      comment: pack.comment
+      comment: pack.comment,
+      lyrics: pack.infoLyrics
     }
   }
 }

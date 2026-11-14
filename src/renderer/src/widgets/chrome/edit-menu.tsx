@@ -1,5 +1,12 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuShortcut,
+  DropdownMenuTrigger
+} from '@/components/ui/dropdown-menu'
 import { editHitFrom, type EditActions } from '@/shared/lib/edit-actions'
 import { useI18n } from '@/shared/i18n'
 import { CopyIcon, CutIcon, PasteIcon, RedoIcon, SelectAllIcon, TrashIcon, UndoIcon } from '@/shared/ui/icons'
@@ -23,7 +30,7 @@ function Item({
     <DropdownMenuItem disabled={disabled} onSelect={onSelect}>
       {icon}
       {label}
-      <span className="menu-kbd">{shortcut}</span>
+      <DropdownMenuShortcut>{shortcut}</DropdownMenuShortcut>
     </DropdownMenuItem>
   )
 }
@@ -53,8 +60,15 @@ export function EditMenu() {
       event.preventDefault()
       fieldRef.current = hit.field
       afterClose.current = null
-      place(event.clientX, event.clientY)
-      setMenu({ x: event.clientX, y: event.clientY, actions: hit.actions })
+      let { clientX: x, clientY: y } = event
+      if (x === 0 && y === 0) {
+        // Menu key / Shift+F10: no pointer position, anchor to the field instead.
+        const rect = hit.field.getBoundingClientRect()
+        x = rect.left + 8
+        y = rect.bottom
+      }
+      place(x, y)
+      setMenu({ x, y, actions: hit.actions })
     }
     window.addEventListener('contextmenu', onMenu, true)
     return () => window.removeEventListener('contextmenu', onMenu, true)
@@ -70,6 +84,11 @@ export function EditMenu() {
   }, [])
 
   const actions = menu?.actions
+  // Every action runs after the menu has closed and the field has its focus back:
+  // clipboard / undo commands act on the focused element, which is the menu item while it is open.
+  const later = (run?: () => void) => () => {
+    afterClose.current = run ?? null
+  }
   return (
     <DropdownMenu open={menu !== null} onOpenChange={(open) => { if (!open) setMenu(null) }}>
       <DropdownMenuTrigger asChild>
@@ -78,33 +97,31 @@ export function EditMenu() {
       <DropdownMenuContent
         align="start"
         side="bottom"
+        sideOffset={0}
         className="menu-edit"
         aria-label={pack.edit}
         onCloseAutoFocus={(event) => {
           event.preventDefault()
           const run = afterClose.current
           afterClose.current = null
-          if (run) run()
-          else fieldRef.current?.focus({ preventScroll: true })
+          fieldRef.current?.focus({ preventScroll: true })
+          run?.()
         }}
       >
-        <Item label={pack.undo} shortcut="Ctrl+Z" icon={<UndoIcon />} disabled={!actions?.canUndo} onSelect={() => actions?.undo()} />
-        <Item label={pack.redo} shortcut="Ctrl+Y" icon={<RedoIcon />} disabled={!actions?.canRedo} onSelect={() => actions?.redo()} />
+        <Item label={pack.undo} shortcut="Ctrl+Z" icon={<UndoIcon />} disabled={!actions?.canUndo} onSelect={later(actions ? () => actions.undo() : undefined)} />
+        <Item label={pack.redo} shortcut="Ctrl+Y" icon={<RedoIcon />} disabled={!actions?.canRedo} onSelect={later(actions ? () => actions.redo() : undefined)} />
         <DropdownMenuSeparator />
-        <Item label={pack.cut} shortcut="Ctrl+X" icon={<CutIcon />} disabled={!actions?.canCut} onSelect={() => actions?.cut()} />
-        <Item label={pack.clipboardCopy} shortcut="Ctrl+C" icon={<CopyIcon />} disabled={!actions?.canCopy} onSelect={() => actions?.copy()} />
-        <Item label={pack.paste} shortcut="Ctrl+V" icon={<PasteIcon />} disabled={!actions?.canPaste} onSelect={() => actions?.paste()} />
-        <Item label={pack.remove} shortcut="Del" icon={<TrashIcon />} disabled={!actions?.canRemove} onSelect={() => actions?.remove()} />
+        <Item label={pack.cut} shortcut="Ctrl+X" icon={<CutIcon />} disabled={!actions?.canCut} onSelect={later(actions ? () => actions.cut() : undefined)} />
+        <Item label={pack.clipboardCopy} shortcut="Ctrl+C" icon={<CopyIcon />} disabled={!actions?.canCopy} onSelect={later(actions ? () => actions.copy() : undefined)} />
+        <Item label={pack.paste} shortcut="Ctrl+V" icon={<PasteIcon />} disabled={!actions?.canPaste} onSelect={later(actions ? () => actions.paste() : undefined)} />
+        <Item label={pack.remove} shortcut="Del" icon={<TrashIcon />} disabled={!actions?.canRemove} onSelect={later(actions ? () => actions.remove() : undefined)} />
         <DropdownMenuSeparator />
         <Item
           label={pack.selectAll}
           shortcut="Ctrl+A"
           icon={<SelectAllIcon />}
           disabled={!actions?.canSelectAll}
-          onSelect={() => {
-            const selectAll = actions?.selectAll
-            afterClose.current = () => selectAll?.()
-          }}
+          onSelect={later(actions ? () => actions.selectAll() : undefined)}
         />
       </DropdownMenuContent>
     </DropdownMenu>

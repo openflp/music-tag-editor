@@ -13,6 +13,7 @@ export const SHORTCUTS = [
   { id: 'prevTab', def: 'Ctrl+Shift+Tab' },
   { id: 'tabMain', def: 'Ctrl+1' },
   { id: 'tabNote', def: 'Ctrl+2' },
+  { id: 'tabLyrics', def: 'Ctrl+5' },
   { id: 'tabInfo', def: 'Ctrl+3' },
   { id: 'tabFile', def: 'Ctrl+4' },
   { id: 'selectAll', def: 'Ctrl+A' },
@@ -38,6 +39,7 @@ interface Prefs {
   confirmReset: boolean
   rememberVolume: boolean
   volume: number
+  showFormatBadges: boolean
 }
 
 const KEY = 'mte.preferences'
@@ -55,7 +57,8 @@ function empty(): Prefs {
     confirmClose: true,
     confirmReset: true,
     rememberVolume: true,
-    volume: 80
+    volume: 80,
+    showFormatBadges: true
   }
 }
 
@@ -80,7 +83,8 @@ function read(): Prefs {
       confirmClose: flag(parsed.confirmClose, true),
       confirmReset: flag(parsed.confirmReset, true),
       rememberVolume: flag(parsed.rememberVolume, true),
-      volume: clamp(parsed.volume, 0, 100, 80)
+      volume: clamp(parsed.volume, 0, 100, 80),
+      showFormatBadges: flag(parsed.showFormatBadges, true)
     }
   } catch {
     return empty()
@@ -199,6 +203,10 @@ export function setConfirmReset(on: boolean): void {
 
 export function setRememberVolume(on: boolean): void {
   write({ ...current, rememberVolume: on })
+}
+
+export function setShowFormatBadges(on: boolean): void {
+  write({ ...current, showFormatBadges: on })
 }
 
 export function setPlayerVolume(value: number): void {

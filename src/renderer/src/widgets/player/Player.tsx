@@ -9,6 +9,107 @@ import { mediaTrackUrl } from '@shared/media'
 
 type RepeatMode = 'off' | 'all' | 'one'
 
+const SEEK_KEYS = new Set(['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End', 'PageUp', 'PageDown'])
+const FADE_MS = 400
+const audioSlot = String(Date.now())
+
+function smoothstep(t: number) {
+  const x = Math.min(1, Math.max(0, t))
+  return x * x * (3 - 2 * x)
+}
+
+function clamp01(value: number) {
+  return Math.min(1, Math.max(0, value))
+}
+
+type Envelope = {
+  move: (to: number, done?: () => void, from?: number) => void
+  cut: (value: number) => void
+  stop: () => void
+  paint: () => void
+}
+
+function makeEnvelope(read: () => { audio: HTMLAudioElement | null; level: number }): Envelope {
+  let token = 0
+  let frame = 0
+  let timer = 0
+  let env = { from: 1, to: 1, start: 0, dur: 0 }
+
+  const heard = () => {
+    if (env.dur <= 0) return env.to
+    const t = (performance.now() - env.start) / env.dur
+    if (t <= 0) return env.from
+    if (t >= 1) return env.to
+    return env.from + (env.to - env.from) * smoothstep(t)
+  }
+
+  const paint = () => {
+    const { audio, level } = read()
+    if (!audio) return
+    // ИЗМЕНЕНО: квадратичная кривая под восприятие громкости (было level * heard())
+    const fade = heard()
+    audio.volume = clamp01(level * fade * fade)
+  }
+
+  const clear = () => {
+    if (frame) window.cancelAnimationFrame(frame)
+    if (timer) window.clearTimeout(timer)
+    frame = 0
+    timer = 0
+  }
+
+  const hold = (value: number) => {
+    token += 1
+    clear()
+    const next = clamp01(value)
+    env = { from: next, to: next, start: performance.now(), dur: 0 }
+    paint()
+  }
+
+  return {
+    cut: hold,
+    stop() {
+      hold(heard())
+    },
+    paint,
+    move(to, done, fromValue) {
+      const mine = ++token
+      clear()
+      const target = clamp01(to)
+      const from = fromValue == null ? heard() : clamp01(fromValue)
+      const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+      if (reduced || Math.abs(from - target) < 0.004) {
+        env = { from: target, to: target, start: performance.now(), dur: 0 }
+        paint()
+        done?.()
+        return
+      }
+      env = { from, to: target, start: performance.now(), dur: FADE_MS }
+      paint()
+      let settled = false
+      const finish = () => {
+        if (settled || mine !== token) return
+        settled = true
+        clear()
+        env = { from: target, to: target, start: performance.now(), dur: 0 }
+        paint()
+        done?.()
+      }
+      const step = () => {
+        if (mine !== token) return
+        if (performance.now() >= env.start + env.dur) {
+          finish()
+          return
+        }
+        paint()
+        frame = window.requestAnimationFrame(step)
+      }
+      frame = window.requestAnimationFrame(step)
+      timer = window.setTimeout(finish, FADE_MS + 40)
+    },
+  }
+}
+
 function playableOrder(): string[] {
   const state = useEditor.getState()
   const known = new Set(state.tracks.filter((track) => !track.error).map((track) => track.path))
@@ -41,6 +142,17 @@ function paintBar(fill: HTMLSpanElement | null, thumb: HTMLSpanElement | null, r
     const mark = zero ? '1' : '0'
     if (thumb.dataset.zero !== mark) thumb.dataset.zero = mark
   }
+}
+
+function blurUnlessKeyboard(input: Element | null | undefined) {
+  if (!(input instanceof HTMLInputElement)) return
+  let keyboard = false
+  try {
+    keyboard = input.matches(':focus-visible')
+  } catch {
+    keyboard = false
+  }
+  if (!keyboard) input.blur()
 }
 
 export function Player({ hidden = false }: { hidden?: boolean }) {
@@ -76,6 +188,11 @@ export function Player({ hidden = false }: { hidden?: boolean }) {
   const failedRef = useRef('')
   const advanceRef = useRef(false)
   const seekingRef = useRef(false)
+  const draggingRef = useRef(false)
+  const pendingSeekRef = useRef<number | null>(null)
+  const lastVolumeRef = useRef(volume > 0 ? volume : 80)
+  const volumeTimer = useRef<number | null>(null)
+  const volumePending = useRef<number | null>(null)
   const holdMs = useRef<number | null>(null)
   const barRef = useRef<HTMLSpanElement>(null)
   const secondRef = useRef(-1)
@@ -86,28 +203,44 @@ export function Player({ hidden = false }: { hidden?: boolean }) {
   const paintRef = useRef<(ms: number, total: number) => void>(() => {})
   const volumeFillRef = useRef<HTMLSpanElement>(null)
   const volumeThumbRef = useRef<HTMLSpanElement>(null)
+  const levelRef = useRef(0)
+  const envelopeRef = useRef<Envelope | null>(null)
+  const swapLock = useRef(false)
+  const keepRef = useRef(false)
+  const [clip, setClip] = useState(0)
 
   const cover = coverActions.cover
   const totalMs = heardMs || durationMs
   const totalRef = useRef(0)
-  totalRef.current = totalMs
+  if (!envelopeRef.current) {
+    envelopeRef.current = makeEnvelope(() => ({
+      audio: audioRef.current,
+      level: levelRef.current,
+    }))
+  }
+  levelRef.current = (muted ? 0 : volume) / 100
   const duration = totalMs ? formatDuration(totalMs) : '0:00'
   const repeatLabel = repeat === 'one' ? pack.loopOne : repeat === 'all' ? pack.loopAll : pack.loopOff
 
-  paintRef.current = (ms: number, total: number) => {
-    const ratio = total > 0 ? Math.min(1, Math.max(0, ms / total)) : 0
-    paintBar(fillRef.current, thumbRef.current, ratio)
-    const seek = seekRef.current
-    if (seek && !seekingRef.current) {
-      const next = String(Math.min(ms, Math.max(total, 1)))
-      if (seek.value !== next) seek.value = next
+  useLayoutEffect(() => {
+    totalRef.current = totalMs
+    paintRef.current = (ms: number, total: number) => {
+      const ratio = total > 0 ? Math.min(1, Math.max(0, ms / total)) : 0
+      paintBar(fillRef.current, thumbRef.current, ratio)
+      const seek = seekRef.current
+      if (seek && !seekingRef.current) {
+        const next = String(Math.min(ms, Math.max(total, 1)))
+        if (seek.value !== next) seek.value = next
+      }
+      const shown = Math.round(ms / 1000)
+      if (elapsedRef.current && shown !== secondRef.current) {
+        secondRef.current = shown
+        const text = formatDuration(ms) || '0:00'
+        elapsedRef.current.textContent = text
+        if (seek) seek.setAttribute('aria-valuetext', text)
+      }
     }
-    const shown = Math.round(ms / 1000)
-    if (elapsedRef.current && shown !== secondRef.current) {
-      secondRef.current = shown
-      elapsedRef.current.textContent = formatDuration(ms) || '0:00'
-    }
-  }
+  })
 
   useLayoutEffect(() => {
     paintBar(fillRef.current, thumbRef.current, 0)
@@ -118,49 +251,106 @@ export function Player({ hidden = false }: { hidden?: boolean }) {
   }, [muted, volume])
 
   useEffect(() => {
-    positionRef.current = 0
-    secondRef.current = -1
-    failedRef.current = ''
-    holdMs.current = null
-    setHeardMs(0)
-    paintRef.current(0, 0)
     const audio = audioRef.current
-    if (audio) {
+    let cancelled = false
+    let queued = false
+
+    const apply = () => {
+      if (cancelled) return
+      swapLock.current = false
+      positionRef.current = 0
+      secondRef.current = -1
+      failedRef.current = ''
+      holdMs.current = null
+      pendingSeekRef.current = null
+      setHeardMs(0)
+      paintRef.current(0, 0)
+      if (!audio) return
       if (!currentPath) {
         audio.pause()
         audio.removeAttribute('src')
         delete audio.dataset.path
-      } else if (audio.dataset.path !== currentPath) {
+        envelopeRef.current?.cut(0)
+        return
+      }
+      if (audio.dataset.path !== currentPath) {
+        envelopeRef.current?.cut(0)
         audio.dataset.path = currentPath
         audio.src = mediaTrackUrl(currentPath)
       }
     }
+
+    const previous = audio?.dataset.path || ''
+    const live = Boolean(audio && previous && previous !== currentPath && !audio.paused && !audio.ended)
+    if (live && audio) {
+      queued = true
+      swapLock.current = true
+      envelopeRef.current?.move(0, () => {
+        if (cancelled) return
+        apply()
+        setClip((n) => n + 1)
+      })
+    } else {
+      apply()
+    }
+
     if (advanceRef.current) {
       advanceRef.current = false
-      return
+      keepRef.current = true
+    } else {
+      keepRef.current = false
+      setPlaying(false)
     }
-    setPlaying(false)
+
+    return () => {
+      cancelled = true
+      if (!queued) return
+      swapLock.current = false
+    }
+    // ИЗМЕНЕНО: audioSlot убран из зависимостей (это константа модуля)
   }, [currentPath])
 
   useEffect(() => {
-    const audio = audioRef.current
-    if (!audio) return
-    audio.volume = (muted ? 0 : volume) / 100
+    levelRef.current = (muted ? 0 : volume) / 100
+    envelopeRef.current?.paint()
   }, [muted, volume])
 
   useEffect(() => {
     const audio = audioRef.current
     if (!audio) return
+    if (swapLock.current) return () => {}
     let cancelled = false
+
+    const release = () => {
+      if (cancelled) return
+      audio.pause()
+      if (!currentPath) {
+        audio.removeAttribute('src')
+        delete audio.dataset.path
+      }
+    }
+
+    if (!playing || !keepRef.current || !currentPath) {
+      if (audio.paused || audio.ended) {
+        release()
+        return
+      }
+      envelopeRef.current?.move(0, release)
+      return () => {
+        cancelled = true
+      }
+    }
+
     const start = () => {
       if (cancelled) return
+      const quiet = audio.paused || audio.ended
+      envelopeRef.current?.move(1, undefined, quiet ? 0 : undefined)
       void audio.play().catch(() => {
-        if (!cancelled) setPlaying(false)
+        if (!cancelled) {
+          keepRef.current = false
+          setPlaying(false)
+        }
       })
-    }
-    if (!playing || hidden || !currentPath) {
-      audio.pause()
-      return
     }
     if (audio.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) start()
     else audio.addEventListener('canplay', start, { once: true })
@@ -168,7 +358,7 @@ export function Player({ hidden = false }: { hidden?: boolean }) {
       cancelled = true
       audio.removeEventListener('canplay', start)
     }
-  }, [playing, hidden, currentPath])
+  }, [playing, currentPath, clip])
 
   useEffect(() => {
     const audio = audioRef.current
@@ -178,11 +368,31 @@ export function Player({ hidden = false }: { hidden?: boolean }) {
       positionRef.current = 0
       secondRef.current = -1
       paintRef.current(0, totalRef.current)
-      void audio.play().catch(() => setPlaying(false))
+      envelopeRef.current?.move(1, undefined, 0)
+      void audio.play().catch(() => {
+        keepRef.current = false
+        setPlaying(false)
+      })
     }
     const onMeta = () => {
       const ms = Number.isFinite(audio.duration) ? Math.round(audio.duration * 1000) : 0
       setHeardMs(ms)
+      const pending = pendingSeekRef.current
+      if (pending != null) {
+        pendingSeekRef.current = null
+        if (Number.isFinite(audio.duration) && audio.duration > 0) {
+          const seconds = Math.min(Math.max(0, audio.duration - 0.05), Math.max(0, pending / 1000))
+          holdMs.current = seconds * 1000
+          try {
+            audio.currentTime = seconds
+          } catch {
+            holdMs.current = null
+          }
+        }
+      }
+    }
+    const onSeeked = () => {
+      if (!audio.seeking) holdMs.current = null
     }
     const onEnd = () => {
       if (seekingRef.current || holdMs.current != null) return
@@ -202,38 +412,46 @@ export function Player({ hidden = false }: { hidden?: boolean }) {
       }
       positionRef.current = totalRef.current
       paintRef.current(totalRef.current, totalRef.current)
+      keepRef.current = false
       setPlaying(false)
     }
     const onError = () => {
       if (!currentPath || audio.dataset.path !== currentPath || failedRef.current === currentPath) return
       if (audio.error?.code === MediaError.MEDIA_ERR_ABORTED) return
       failedRef.current = currentPath
+      keepRef.current = false
       setPlaying(false)
       useEditor.getState().notify({ kind: 'err', text: getPack().playFail })
     }
     audio.addEventListener('loadedmetadata', onMeta)
+    audio.addEventListener('seeked', onSeeked)
     audio.addEventListener('ended', onEnd)
     audio.addEventListener('error', onError)
     return () => {
       audio.removeEventListener('loadedmetadata', onMeta)
+      audio.removeEventListener('seeked', onSeeked)
       audio.removeEventListener('ended', onEnd)
       audio.removeEventListener('error', onError)
     }
   }, [currentPath, repeat, shuffle, select])
 
   const playCommand = useEditor((state) => state.playCommand)
-  const playSeen = useRef(0)
+  const playSeen = useRef(useEditor.getState().playCommand?.id ?? 0)
   const hiddenRef = useRef(hidden)
   useEffect(() => {
     const wasHidden = hiddenRef.current
     hiddenRef.current = hidden
-    if (hidden && !wasHidden) setPlaying(false)
+    if (hidden && !wasHidden) {
+      keepRef.current = false
+      setPlaying(false)
+    }
   }, [hidden])
 
   useEffect(() => {
     if (!playCommand || playCommand.id === playSeen.current) return
     playSeen.current = playCommand.id
     if (playCommand.type === 'pause') {
+      keepRef.current = false
       setPlaying(false)
       return
     }
@@ -246,6 +464,7 @@ export function Player({ hidden = false }: { hidden?: boolean }) {
       secondRef.current = -1
       paintRef.current(0, end)
     }
+    keepRef.current = true
     setPlaying(true)
   }, [playCommand, currentPath])
 
@@ -255,10 +474,33 @@ export function Player({ hidden = false }: { hidden?: boolean }) {
   }, [playing, currentPath])
 
   useEffect(() => {
-    if (!playing) return
+    return () => {
+      audioRef.current?.pause()
+      envelopeRef.current?.stop()
+      if (useEditor.getState().nowPlaying !== null) useEditor.setState({ nowPlaying: null })
+    }
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      if (volumeTimer.current != null) {
+        window.clearTimeout(volumeTimer.current)
+        volumeTimer.current = null
+        const pending = volumePending.current
+        volumePending.current = null
+        if (pending != null) setPlayerVolume(pending)
+      }
+    }
+  }, [])
+
+  useEffect(() => {
+    // ИЗМЕНЕНО: цикл обновления полоски работает, пока звук реально играет,
+    // в том числе во время затухания после нажатия паузы
+    if (!playing && (audioRef.current?.paused ?? true)) return
     let frame = 0
     const tick = () => {
       const audio = audioRef.current
+      if (!playing && (!audio || audio.paused)) return
       if (audio && !seekingRef.current && !audio.paused) {
         const held = holdMs.current
         const actual = audio.currentTime * 1000
@@ -272,6 +514,17 @@ export function Player({ hidden = false }: { hidden?: boolean }) {
     frame = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(frame)
   }, [playing])
+
+  const saveVolume = (value: number) => {
+    volumePending.current = value
+    if (volumeTimer.current != null) window.clearTimeout(volumeTimer.current)
+    volumeTimer.current = window.setTimeout(() => {
+      volumeTimer.current = null
+      const pending = volumePending.current
+      volumePending.current = null
+      if (pending != null) setPlayerVolume(pending)
+    }, 200)
+  }
 
   const moveSeek = (clientX: number) => {
     const bar = barRef.current
@@ -293,7 +546,11 @@ export function Player({ hidden = false }: { hidden?: boolean }) {
 
   const applySeek = (ms: number) => {
     const audio = audioRef.current
-    if (!audio || !Number.isFinite(audio.duration) || audio.duration <= 0) return
+    if (!audio) return
+    if (!Number.isFinite(audio.duration) || audio.duration <= 0) {
+      pendingSeekRef.current = Math.max(0, ms)
+      return
+    }
     const seconds = Math.min(Math.max(0, audio.duration - 0.05), Math.max(0, ms / 1000))
     holdMs.current = seconds * 1000
     if (Math.abs(audio.currentTime - seconds) < 0.03) {
@@ -322,9 +579,23 @@ export function Player({ hidden = false }: { hidden?: boolean }) {
     if (playing && after && after !== before) advanceRef.current = true
   }
 
+  const toggleMute = () => {
+    const silent = muted || volume === 0
+    if (!silent) {
+      setMuted(true)
+      return
+    }
+    const restore = volume === 0 ? lastVolumeRef.current || 80 : volume
+    if (volume === 0) {
+      setVolume(restore)
+      if (getPrefs().rememberVolume) saveVolume(restore)
+    }
+    setMuted(false)
+  }
+
   return (
     <footer className={hidden ? 'player player-off' : 'player'} aria-label={pack.player} aria-hidden={hidden || undefined} inert={hidden ? true : undefined}>
-      <audio ref={audioRef} preload="auto" />
+      <audio key={audioSlot} ref={audioRef} preload="auto" />
       <div className="player-art">
         {cover ? <img alt="" src={coverSrc(cover.mime, cover.dataBase64)} /> : (
           <span className="player-art-empty">
@@ -347,7 +618,8 @@ export function Player({ hidden = false }: { hidden?: boolean }) {
             secondRef.current = -1
             paintRef.current(0, totalMs)
           }
-          setPlaying((on) => !on)
+          keepRef.current = !playing
+          setPlaying(!playing)
         }}>
           {playing ? <PauseIcon /> : <PlayIcon />}
         </button>
@@ -365,11 +637,12 @@ export function Player({ hidden = false }: { hidden?: boolean }) {
           className={seeking ? 'player-bar hot' : 'player-bar'}
           onMouseLeave={() => {
             if (seekingRef.current) return
-            seekRef.current?.blur()
+            blurUnlessKeyboard(seekRef.current)
           }}
           onPointerDown={(event) => {
             if (!totalRef.current || event.button !== 0) return
             seekingRef.current = true
+            draggingRef.current = true
             setSeeking(true)
             event.currentTarget.setPointerCapture(event.pointerId)
             moveSeek(event.clientX)
@@ -383,13 +656,20 @@ export function Player({ hidden = false }: { hidden?: boolean }) {
             const next = moveSeek(event.clientX)
             if (next != null) applySeek(next)
             seekingRef.current = false
+            draggingRef.current = false
             setSeeking(false)
             event.currentTarget.releasePointerCapture(event.pointerId)
           }}
           onPointerCancel={(event) => {
             seekingRef.current = false
+            draggingRef.current = false
             setSeeking(false)
             if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
+          }}
+          onLostPointerCapture={() => {
+            seekingRef.current = false
+            draggingRef.current = false
+            setSeeking(false)
           }}
         >
           <span className="player-bar-track">
@@ -405,11 +685,14 @@ export function Player({ hidden = false }: { hidden?: boolean }) {
             defaultValue={0}
             disabled={!totalMs}
             aria-label={pack.position}
-            onKeyDown={() => {
-              seekingRef.current = true
+            onKeyDown={(event) => {
+              if (SEEK_KEYS.has(event.key)) seekingRef.current = true
             }}
-            onKeyUp={() => {
-              seekingRef.current = false
+            onKeyUp={(event) => {
+              if (SEEK_KEYS.has(event.key) && !draggingRef.current) seekingRef.current = false
+            }}
+            onBlur={() => {
+              if (!draggingRef.current) seekingRef.current = false
             }}
             onInput={(event) => {
               const next = Number(event.currentTarget.value)
@@ -427,8 +710,7 @@ export function Player({ hidden = false }: { hidden?: boolean }) {
         className={volumeHold ? 'player-volume hot' : 'player-volume'}
         onMouseLeave={(event) => {
           if (volumeHold) return
-          const input = event.currentTarget.querySelector('input')
-          if (input instanceof HTMLInputElement) input.blur()
+          blurUnlessKeyboard(event.currentTarget.querySelector('input'))
         }}
       >
         <button
@@ -436,7 +718,7 @@ export function Player({ hidden = false }: { hidden?: boolean }) {
           className="icon-btn player-aux"
           aria-label={muted || volume === 0 ? pack.unmute : pack.mute}
           aria-pressed={muted || volume === 0}
-          onClick={() => setMuted((on) => !on)}
+          onClick={toggleMute}
         >
           {muted || volume === 0 ? <VolumeOffIcon /> : <VolumeIcon />}
         </button>
@@ -464,9 +746,10 @@ export function Player({ hidden = false }: { hidden?: boolean }) {
               onLostPointerCapture={() => setVolumeHold(false)}
               onChange={(event) => {
                 const next = Number(event.target.value)
+                if (next > 0) lastVolumeRef.current = next
                 setVolume(next)
                 setMuted(next === 0)
-                if (getPrefs().rememberVolume) setPlayerVolume(next)
+                if (getPrefs().rememberVolume) saveVolume(next)
               }}
             />
           </span>

@@ -1,4 +1,4 @@
-import { fileName, fileParts, hasNumberToken, putNumber, resolveTarget, sameFilePath, shuffleNumbers, type FileNamePlan } from './filename'
+import { expandOperators, fileName, fileParts, hasNumberToken, resolveTarget, sameFilePath, shuffleNumbers, type FileNamePlan } from './filename'
 import { APPLY_FIELDS, SOLO_FIELDS, type CoverArt, type TagField, type TrackTags, type WriteJob } from './types'
 
 export interface PlanTrack {
@@ -29,7 +29,8 @@ const FIELD_LABEL: Record<TagField, string> = {
   trackTotal: 'Число треков',
   discNumber: 'Номер диска',
   discTotal: 'Число дисков',
-  comment: 'Комментарий'
+  comment: 'Комментарий',
+  lyrics: 'Текст'
 }
 
 export interface WriteChange {
@@ -38,7 +39,7 @@ export interface WriteChange {
   lines: string[]
 }
 
-const TEXT_FIELDS = ['title', 'artist', 'album', 'albumArtist', 'genre', 'comment'] as const
+const TEXT_FIELDS = ['title', 'artist', 'album', 'albumArtist', 'genre', 'comment', 'lyrics'] as const
 
 export function numberingActive(tracks: PlanTrack[], state: PlanState): boolean {
   if (hasFixed(state.fileName?.fixed)) return true
@@ -83,18 +84,28 @@ export function preparePlan(tracks: PlanTrack[], state: PlanState): PlanState {
   }
 }
 
-export function shownText(value: string, number: string | undefined): string {
-  if (!number) return value
-  return putNumber(value, number)
+function overlayTags(track: PlanTrack, state: PlanState): TrackTags {
+  const tags = { ...track.draft }
+  for (const field of APPLY_FIELDS) {
+    if (state.applyAll[field]) tags[field] = state.applyValues[field]
+  }
+  return tags
 }
 
-function stampTags(tags: TrackTags, number: string | undefined): TrackTags {
-  if (!number) return tags
+export function shownText(value: string, tags: TrackTags, sourcePath: string, number?: string, tokens?: Record<string, string>): string {
+  const expanded = expandOperators(value, tags, sourcePath, number, tokens).trim()
+  return expanded || value.trim()
+}
+
+function stampTags(tags: TrackTags, sourcePath: string, number: string | undefined, tokens?: Record<string, string>): TrackTags {
   const next = { ...tags }
   for (const field of TEXT_FIELDS) {
     const value = next[field]
-    if (typeof value === 'string' && hasNumberToken(value)) next[field] = putNumber(value, number)
+    if (typeof value !== 'string' || !value.includes('%')) continue
+    const expanded = expandOperators(value, tags, sourcePath, number, tokens)
+    if (expanded !== value) next[field] = expanded
   }
+  if (!number) return next
   const parsed = Number(number)
   if (Number.isInteger(parsed)) next.trackNumber = parsed
   return next
@@ -108,22 +119,20 @@ function namePlan(state: PlanState): FileNamePlan | undefined {
 }
 
 export function shownTrackTitle(track: PlanTrack, state: PlanState): string {
-  const number = state.fileName?.numbers?.[track.path]
-  const title = shownText(track.draft.title, number).trim()
+  const tags = overlayTags(track, state)
+  const title = shownText(tags.title, tags, track.path, state.fileName?.numbers?.[track.path], state.fileName?.tokens)
   if (title) return title
   return fileName(resolveTarget(track.path, writtenTags(track, state), namePlan(state)) ?? track.path)
 }
 
 export function shownTrackArtist(track: PlanTrack, state: PlanState): string {
-  return shownText(track.draft.artist, state.fileName?.numbers?.[track.path]).trim()
+  const tags = overlayTags(track, state)
+  return shownText(tags.artist, tags, track.path, state.fileName?.numbers?.[track.path], state.fileName?.tokens)
 }
 
 export function writtenTags(track: PlanTrack, state: PlanState): TrackTags {
-  const tags = { ...track.draft }
-  for (const field of APPLY_FIELDS) {
-    if (state.applyAll[field]) setPatch(tags, field, state.applyValues[field])
-  }
-  return stampTags(tags, state.fileName?.numbers?.[track.path])
+  const tags = overlayTags(track, state)
+  return stampTags(tags, track.path, state.fileName?.numbers?.[track.path], state.fileName?.tokens)
 }
 
 export interface PreviewWords {

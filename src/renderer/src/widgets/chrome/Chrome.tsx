@@ -58,18 +58,29 @@ function rankRows<T>(rows: T[], query: string, text: (row: T) => string): T[] {
     .map((item) => item.row)
 }
 
+function toView(track: TrackVm) {
+  return {
+    path: track.path,
+    error: track.error,
+    original: track.original,
+    draft: track.draft,
+    originalCover: track.originalCover,
+    draftCover: track.draftCover
+  }
+}
+
 function isDirty(track: TrackVm, plan: ReturnType<typeof editorPlan>): boolean {
-  return trackDirty(
-    {
-      path: track.path,
-      error: track.error,
-      original: track.original,
-      draft: track.draft,
-      originalCover: track.originalCover,
-      draftCover: track.draftCover
-    },
-    plan
-  )
+  return trackDirty(toView(track), plan)
+}
+
+function labelOf(track: TrackVm, plan: ReturnType<typeof editorPlan> | null) {
+  if (!plan) return { title: track.draft.title, artist: track.draft.artist, number: undefined }
+  const view = toView(track)
+  return {
+    title: shownTrackTitle(view, plan),
+    artist: shownTrackArtist(view, plan),
+    number: plan.fileName?.numbers?.[track.path]
+  }
 }
 
 export function CommandPalette({ open, onClose }: { open: boolean; onClose: () => void }) {
@@ -114,29 +125,21 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
   })
   const showCommands = tab === 'all' || tab === 'commands'
   const q = query.trim()
-  const labelOf = (track: TrackVm) => {
-    const view = {
-      path: track.path,
-      error: track.error,
-      original: track.original,
-      draft: track.draft,
-      originalCover: track.originalCover,
-      draftCover: track.draftCover
-    }
-    if (!plan) return { title: track.draft.title, artist: track.draft.artist, number: undefined }
-    const title = shownTrackTitle(view, plan)
-    const artist = shownTrackArtist(view, plan)
-    const number = plan.fileName?.numbers?.[track.path]
-    return { title, artist, number }
-  }
+  const labels = useMemo(() => {
+    const map = new Map<string, ReturnType<typeof labelOf>>()
+    if (!open) return map
+    for (const track of tracks) map.set(track.path, labelOf(track, plan))
+    return map
+  }, [open, tracks, plan])
+  const labelFor = (track: TrackVm) => labels.get(track.path) ?? labelOf(track, plan)
   const rankedFiles = rankRows(files, q, (track) => {
-    const label = labelOf(track)
+    const label = labelFor(track)
     return `${label.title} ${label.artist} ${track.draft.title} ${track.draft.artist} ${label.number ?? ''}`
   })
   const rankedCommands = rankRows(commands, q, (command) => command.label)
   const visibleFiles = (q ? rankedFiles : rankedFiles.slice(0, shown)).slice(0, PALETTE_LIMIT)
   const busy = !q && shown < Math.min(files.length, PALETTE_LIMIT)
-  const fileLeadScore = rankedFiles[0] ? defaultFilter(`${labelOf(rankedFiles[0]).title} ${labelOf(rankedFiles[0]).artist}`, q) : 0
+  const fileLeadScore = rankedFiles[0] ? defaultFilter(`${labelFor(rankedFiles[0]).title} ${labelFor(rankedFiles[0]).artist}`, q) : 0
   const commandLeadScore = rankedCommands[0] ? defaultFilter(rankedCommands[0].label, q) : 0
   const filesLead = !q || fileLeadScore >= commandLeadScore
 
@@ -147,8 +150,15 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
   }, [open, shown, files.length, q])
 
   useEffect(() => {
+    if (open) return
+    setQuery('')
+    setTab('all')
+    setShown(PAGE)
+  }, [open])
+
+  useEffect(() => {
     document.querySelector('.command-glass .cmd-results .cmd-scroll-body')?.scrollTo({ top: 0 })
-  }, [q])
+  }, [q, tab])
 
   const stepTab = (dir: -1 | 1) => {
     setTab((current) => {
@@ -168,12 +178,12 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
       }
     >
       {visibleFiles.map((track) => {
-        const { title, artist, number } = labelOf(track)
+        const { title, artist, number } = labelFor(track)
         const cover = track.draftCover
         return (
           <CommandItem
             key={track.path}
-            value={`${title} ${artist} ${number ?? ''}`}
+            value={`file:${track.path}`}
             onSelect={() => {
               select(track.path, 'single')
               onClose()
@@ -202,7 +212,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
       {rankedCommands.map((command) => (
         <CommandItem
           key={command.id}
-          value={command.label}
+          value={`cmd:${command.id}`}
           onSelect={() => {
             command.run()
             onClose()
@@ -360,6 +370,13 @@ export function SidebarResizer({ width, onWidth, collapsed = false }: { width: n
     return value
   }
 
+  const finish = (node: HTMLElement) => {
+    node.closest('.workspace')?.classList.remove('sb-drag')
+    if (!drag.current) return
+    drag.current = null
+    onWidth(live.current)
+  }
+
   return (
     <div
       className="resizer"
@@ -372,12 +389,18 @@ export function SidebarResizer({ width, onWidth, collapsed = false }: { width: n
       tabIndex={collapsed ? -1 : 0}
       aria-hidden={collapsed || undefined}
       onKeyDown={(event) => {
+        if (event.key === 'Home' || event.key === 'End') {
+          event.preventDefault()
+          onWidth(commit(event.key === 'Home' ? SIDEBAR_MIN : SIDEBAR_MAX, event.currentTarget))
+          return
+        }
         const step = event.key === 'ArrowLeft' ? -16 : event.key === 'ArrowRight' ? 16 : 0
         if (!step) return
         event.preventDefault()
         onWidth(commit(live.current + step, event.currentTarget))
       }}
       onPointerDown={(event) => {
+        if (event.button !== 0 || collapsed) return
         event.currentTarget.closest('.workspace')?.classList.add('sb-drag')
         drag.current = { x: event.clientX, width: live.current }
         event.currentTarget.setPointerCapture(event.pointerId)
@@ -386,12 +409,9 @@ export function SidebarResizer({ width, onWidth, collapsed = false }: { width: n
         if (!drag.current) return
         commit(drag.current.width + event.clientX - drag.current.x, event.currentTarget)
       }}
-      onPointerUp={(event) => {
-        event.currentTarget.closest('.workspace')?.classList.remove('sb-drag')
-        if (!drag.current) return
-        drag.current = null
-        onWidth(live.current)
-      }}
+      onPointerUp={(event) => finish(event.currentTarget)}
+      onPointerCancel={(event) => finish(event.currentTarget)}
+      onLostPointerCapture={(event) => finish(event.currentTarget)}
       onDoubleClick={(event) => {
         drag.current = null
         onWidth(commit(SIDEBAR_REST, event.currentTarget))

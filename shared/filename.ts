@@ -89,6 +89,28 @@ export function putNumber(value: string, number: string): string {
   return value.replace(/%n%/gi, number)
 }
 
+function replaceTokens(value: string, replacer: (name: string) => string | undefined): string {
+  return value.replace(/%([a-z][a-z0-9]*)%/gi, (all, key: string) => replacer(key.toLowerCase()) ?? all)
+}
+
+export function expandOperators(value: string, tags: TrackTags, sourcePath: string, number?: string, tokens?: Record<string, string>, emptyNumber = false): string {
+  if (!value.includes('%')) return value
+  const file = fileParts(sourcePath)
+  const rawOf = (name: string): string | undefined => {
+    if (name === 'n') return number ?? (emptyNumber ? '' : undefined)
+    if (tokens && Object.prototype.hasOwnProperty.call(tokens, name)) return tokens[name] ?? ''
+    const token = TOKEN_VALUE[name]
+    return token ? token(tags, file) : undefined
+  }
+  const resolve = (name: string, stack: string[]): string | undefined => {
+    if (stack.includes(name) || stack.length > 4) return undefined
+    const raw = rawOf(name)
+    if (raw === undefined) return undefined
+    return replaceTokens(raw, (key) => resolve(key, [...stack, name]))
+  }
+  return replaceTokens(value, (name) => resolve(name, []))
+}
+
 export function shuffleNumbers(paths: string[], seed: number, options?: { start?: number; width?: number }): Record<string, string> {
   const list = [...paths]
   let state = seed >>> 0 || 1
@@ -114,13 +136,7 @@ export function shuffleNumbers(paths: string[], seed: number, options?: { start?
 
 export function applyMask(mask: string, tags: TrackTags, sourcePath: string, number?: string, tokens?: Record<string, string>): string {
   const file = fileParts(sourcePath)
-  const replaced = mask.replace(/%([a-z]+)%/gi, (all, key: string) => {
-    const name = key.toLowerCase()
-    if (name === 'n') return number ?? ''
-    if (tokens && Object.prototype.hasOwnProperty.call(tokens, name)) return tokens[name] ?? ''
-    const token = TOKEN_VALUE[name]
-    return token ? token(tags, file) : all
-  })
+  const replaced = expandOperators(mask, tags, sourcePath, number, tokens, true)
   let stem = sanitizeFileStem(replaced)
   if (file.ext && stem.toLowerCase().endsWith(file.ext.toLowerCase())) stem = sanitizeFileStem(stem.slice(0, -file.ext.length))
   return stem || file.stem

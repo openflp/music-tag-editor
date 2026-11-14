@@ -6,6 +6,7 @@ import { randomBytes } from 'node:crypto'
 import type { ByteVector, File as TagFile, IPicture } from 'node-taglib-sharp'
 import {
   MAX_COVER_BYTES,
+  MAX_LYRICS_CHARS,
   emptyTags,
   emptyTech,
   type CoverArt,
@@ -14,6 +15,7 @@ import {
   type WriteJob,
   type WriteResult
 } from '@shared/types'
+import { describeMedia } from './file-facts'
 import { InputError } from './validate'
 
 const require = createRequire(import.meta.url)
@@ -63,30 +65,9 @@ function gainText(label: string, gain: number, peak: number): string {
   return parts.length ? `${label} ${parts.join(', ')}` : ''
 }
 
-function encoderOf(tag: TagFile['tag']): string {
-  try {
-    const id3 = tag as { getTextAsString?: (ident: unknown) => string }
-    if (typeof id3.getTextAsString === 'function') {
-      const { Id3v2FrameIdentifiers } = require('node-taglib-sharp') as typeof import('node-taglib-sharp')
-      const person = id3.getTextAsString(Id3v2FrameIdentifiers.TENC)?.trim() ?? ''
-      const tool = id3.getTextAsString(Id3v2FrameIdentifiers.TSSE)?.trim() ?? ''
-      const text = [person, tool].filter(Boolean).join(' · ')
-      if (text) return text
-    }
-  } catch {
-    /* не ID3 */
-  }
-  try {
-    const xiph = tag as { getField?: (key: string) => string[] }
-    if (typeof xiph.getField === 'function') {
-      const values = [...(xiph.getField('ENCODER') ?? []), ...(xiph.getField('ENCODED-BY') ?? []), ...(xiph.getField('ENCODEDBY') ?? [])]
-      const text = values.map((item) => item.trim()).filter(Boolean).join(' · ')
-      if (text) return text
-    }
-  } catch {
-    /* не Vorbis comment */
-  }
-  return ''
+function codecLabel(properties: TagFile['properties']): string {
+  const names = (properties.codecs ?? []).flatMap((item) => (item?.description ? [item.description] : []))
+  return names.join(', ') || text(properties.description)
 }
 
 function fileStamp(filePath: string): { size: number; createdMs: number; modifiedMs: number } {
@@ -114,7 +95,8 @@ function readTags(tag: TagFile['tag']): TrackTags {
     trackTotal: numOrNull(tag.trackCount),
     discNumber: numOrNull(tag.disc),
     discTotal: numOrNull(tag.discCount),
-    comment: text(tag.comment)
+    comment: text(tag.comment),
+    lyrics: text(tag.lyrics).slice(0, MAX_LYRICS_CHARS)
   }
 }
 
@@ -122,6 +104,14 @@ export function readTrack(filePath: string): TrackSnapshot {
   let file: TagFile | null = null
   try {
     file = File.createFromPath(filePath)
+    const media = (() => {
+      try {
+        return describeMedia(file)
+      } catch {
+        return { encoder: '', container: '', lossless: false, tagTypes: '', channelMode: '' as const, facts: [] }
+      }
+    })()
+    const stamp = fileStamp(filePath)
     return {
       path: filePath,
       format: extname(filePath).toLowerCase(),
@@ -132,12 +122,17 @@ export function readTrack(filePath: string): TrackSnapshot {
         bitrate: file.properties.audioBitrate || 0,
         sampleRate: file.properties.audioSampleRate || 0,
         channels: file.properties.audioChannels || 0,
+        channelMode: media.channelMode,
         bitsPerSample: file.properties.bitsPerSample || 0,
-        ...fileStamp(filePath),
+        ...stamp,
         bpm: file.tag.beatsPerMinute || 0,
         key: text(file.tag.initialKey),
-        encoder: encoderOf(file.tag),
-        codec: file.properties.codecs?.map((item) => item.description).filter(Boolean).join(', ') || text(file.properties.description),
+        encoder: media.encoder,
+        codec: codecLabel(file.properties),
+        container: media.container,
+        lossless: media.lossless,
+        tagTypes: media.tagTypes,
+        facts: media.facts,
         composer: joinText(file.tag.composers),
         publisher: text(file.tag.publisher),
         copyright: text(file.tag.copyright),
@@ -150,7 +145,7 @@ export function readTrack(filePath: string): TrackSnapshot {
         replayGain: [gainText('трек', file.tag.replayGainTrackGain, file.tag.replayGainTrackPeak), gainText('альбом', file.tag.replayGainAlbumGain, file.tag.replayGainAlbumPeak)]
           .filter(Boolean)
           .join(' · '),
-        lyrics: text(file.tag.lyrics).slice(0, 8000)
+        lyrics: text(file.tag.lyrics).slice(0, MAX_LYRICS_CHARS)
       }
     }
   } catch (error) {
@@ -174,6 +169,7 @@ function applyPatch(file: TagFile, job: WriteJob): void {
   if (patch.discNumber !== undefined) tag.disc = patch.discNumber ?? 0
   if (patch.discTotal !== undefined) tag.discCount = patch.discTotal ?? 0
   if (patch.comment !== undefined) tag.comment = patch.comment
+  if (patch.lyrics !== undefined) tag.lyrics = patch.lyrics
   if (job.cover === null) tag.pictures = []
   if (job.cover) {
     const data: ByteVector = Bytes.fromByteArray(Buffer.from(job.cover.dataBase64, 'base64'))

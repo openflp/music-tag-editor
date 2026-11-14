@@ -17,11 +17,12 @@ export type AudioExtension = (typeof AUDIO_EXTENSIONS)[number]
 export const IMAGE_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.webp', '.gif'] as const
 
 export const MAX_COVER_BYTES = 8 * 1024 * 1024
+export const MAX_LYRICS_CHARS = 8000
 export const MAX_FILES = 5000
 export const HISTORY_LIMIT = 20
 
 export const APPLY_FIELDS = ['artist', 'album', 'albumArtist', 'genre', 'year', 'comment'] as const
-export const SOLO_FIELDS = ['title', 'trackNumber', 'trackTotal', 'discNumber', 'discTotal'] as const
+export const SOLO_FIELDS = ['title', 'trackNumber', 'trackTotal', 'discNumber', 'discTotal', 'lyrics'] as const
 export const HISTORY_FIELDS = ['artist', 'album', 'albumArtist', 'genre'] as const
 
 export type ApplyField = (typeof APPLY_FIELDS)[number]
@@ -41,6 +42,7 @@ export interface TrackTags {
   discNumber: number | null
   discTotal: number | null
   comment: string
+  lyrics: string
 }
 
 export interface CoverArt {
@@ -49,11 +51,17 @@ export interface CoverArt {
   dataBase64: string
 }
 
+export interface TrackFact {
+  key: string
+  value: string
+}
+
 export interface TrackTech {
   durationMs: number
   bitrate: number
   sampleRate: number
   channels: number
+  channelMode: '' | 'joint' | 'dual'
   bitsPerSample: number
   size: number
   createdMs: number
@@ -62,6 +70,9 @@ export interface TrackTech {
   key: string
   encoder: string
   codec: string
+  container: string
+  lossless: boolean
+  tagTypes: string
   composer: string
   publisher: string
   copyright: string
@@ -73,6 +84,7 @@ export interface TrackTech {
   musicBrainz: string
   replayGain: string
   lyrics: string
+  facts: TrackFact[]
 }
 
 export function emptyTech(): TrackTech {
@@ -81,6 +93,7 @@ export function emptyTech(): TrackTech {
     bitrate: 0,
     sampleRate: 0,
     channels: 0,
+    channelMode: '',
     bitsPerSample: 0,
     size: 0,
     createdMs: 0,
@@ -89,6 +102,10 @@ export function emptyTech(): TrackTech {
     key: '',
     encoder: '',
     codec: '',
+    container: '',
+    lossless: false,
+    tagTypes: '',
+    facts: [],
     composer: '',
     publisher: '',
     copyright: '',
@@ -160,7 +177,7 @@ export interface AppSettings {
 
 export const DEFAULT_APP_SETTINGS: AppSettings = {
   hardwareAcceleration: true,
-  backgroundThrottling: true,
+  backgroundThrottling: false, // ИЗМЕНЕНО: было true, из-за этого в свёрнутом окне рвалось затухание плеера
   spellcheck: false,
   zoom: 1,
   openAtLogin: false,
@@ -220,7 +237,8 @@ export function emptyTags(): TrackTags {
     trackTotal: null,
     discNumber: null,
     discTotal: null,
-    comment: ''
+    comment: '',
+    lyrics: ''
   }
 }
 
