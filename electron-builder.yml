@@ -10,6 +10,7 @@ files:
 asar: true
 npmRebuild: false
 win:
+  icon: src/renderer/public/icon.ico
   target:
     - nsis
   artifactName: ${productName}-${version}-win-${arch}.${ext}
@@ -18,11 +19,13 @@ nsis:
   perMachine: false
   allowToChangeInstallationDirectory: true
 mac:
+  icon: src/renderer/public/icon.png
   target:
     - dmg
   category: public.app-category.music
   artifactName: ${productName}-${version}-mac-${arch}.${ext}
 linux:
+  icon: src/renderer/public/icon.png
   target:
     - AppImage
   category: Audio

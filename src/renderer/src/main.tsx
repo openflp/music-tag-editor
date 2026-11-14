@@ -8,12 +8,15 @@ import './app/styles.css'
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { App } from './app/App'
+import { CrashBoundary } from './app/CrashScreen'
 
 const root = document.getElementById('root')
 if (!root) throw new Error('Не найден корневой элемент')
 
 createRoot(root).render(
   <StrictMode>
-    <App />
+    <CrashBoundary>
+      <App />
+    </CrashBoundary>
   </StrictMode>
 )

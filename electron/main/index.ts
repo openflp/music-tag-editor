@@ -1,5 +1,6 @@
 import { dirname, join, parse } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { existsSync } from 'node:fs'
 import { copyFile, readFile, stat, writeFile } from 'node:fs/promises'
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, nativeTheme, screen, session, shell, utilityProcess, type UtilityProcess } from 'electron'
 import { packFor, type LocaleId } from '@shared/i18n'
@@ -13,7 +14,7 @@ import { readTracks } from '../services/library'
 import { readAppSettings, readBounds, readHistory, pushHistory, writeAppSettings, writeBounds } from '../services/settings'
 import { writeTrack } from '../services/tag-io'
 import { orderWrites } from '@shared/filename'
-import { assertAccelerator, assertAppSettings, assertAudioFilePath, assertCloseConfirm, assertCoverInput, assertDirectoryPath, assertDragFiles, assertPathList, assertRepositoryUrl, assertTextExport, assertWriteJob, assertWriteJobs, extensionForMime, isImagePath, mimeFromImagePath } from '../services/validate'
+import { assertAccelerator, assertAppSettings, assertAudioFilePath, assertCloseConfirm, assertCoverInput, assertDirectoryPath, assertDragFiles, assertPathList, assertRepositoryUrl, assertTextExport, assertWriteJob, assertWriteJobs, extensionForMime, isImagePath, issueReportUrl, mimeFromImagePath } from '../services/validate'
 import { MAX_COVER_BYTES } from '@shared/types'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -25,7 +26,16 @@ function dragIcon() {
   if (icon.isEmpty()) throw new Error('Пустая иконка перетаскивания')
   return icon
 }
+
+function resolveAppIcon(file: string): string | undefined {
+  const candidates = [
+    join(here, '../../src/renderer/public', file),
+    join(app.getAppPath(), 'out/renderer', file)
+  ]
+  return candidates.find((candidate) => existsSync(candidate))
+}
 let win: BrowserWindow | null = null
+let crashDialog = false
 let locale: LocaleId = 'ru'
 let allowClose = false
 let hardwareLive = true
@@ -124,7 +134,13 @@ async function createWindow(): Promise<void> {
   const width = Math.min(Math.max(saved?.width ?? 1280, WINDOW_MIN_WIDTH), area.width)
   const height = Math.min(Math.max(saved?.height ?? 800, WINDOW_MIN_HEIGHT), area.height)
   nativeTheme.themeSource = 'dark'
+  const windowIcon = resolveAppIcon(process.platform === 'win32' ? 'icon.ico' : 'icon.png')
+  if (process.platform === 'darwin') {
+    const dockIcon = resolveAppIcon('icon.png')
+    if (dockIcon) app.dock?.setIcon(dockIcon)
+  }
   win = new BrowserWindow({
+    icon: windowIcon,
     width,
     height,
     minWidth: WINDOW_MIN_WIDTH,
@@ -180,6 +196,30 @@ async function createWindow(): Promise<void> {
   })
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   win.webContents.on('will-navigate', (event) => event.preventDefault())
+  win.webContents.on('render-process-gone', (_event, details) => {
+    if (!win || crashDialog || details.reason === 'clean-exit') return
+    crashDialog = true
+    const text = L()
+    const body = `${details.reason}\nexit ${details.exitCode}`
+    void dialog
+      .showMessageBox(win, {
+        type: 'error',
+        title: text.crashTitle,
+        message: text.crashTitle,
+        detail: `${text.crashLead}\n\n${body}`,
+        buttons: [text.crashReload, text.crashReport],
+        defaultId: 0,
+        cancelId: 0,
+        noLink: true
+      })
+      .then(async (result) => {
+        if (result.response === 1) await shell.openExternal(issueReportUrl(body, text.crashTitle))
+        if (!win?.isDestroyed()) win?.webContents.reload()
+      })
+      .finally(() => {
+        crashDialog = false
+      })
+  })
   if (process.env.ELECTRON_RENDERER_URL) void win.loadURL(process.env.ELECTRON_RENDERER_URL)
   else void win.loadFile(join(here, '../renderer/index.html'))
 }
@@ -396,6 +436,14 @@ function registerIpc(): void {
 
   ipcMain.handle(IPC.openRepository, async (_event, payload: unknown) => {
     await shell.openExternal(assertRepositoryUrl(payload))
+  })
+
+  ipcMain.handle(IPC.openIssues, async (_event, payload: unknown) => {
+    await shell.openExternal(issueReportUrl(payload, L().crashTitle))
+  })
+
+  ipcMain.handle(IPC.reloadWindow, (event) => {
+    if (!event.sender.isDestroyed()) event.sender.reload()
   })
 
   ipcMain.handle(IPC.closeConfirm, (_event, payload: unknown) => {

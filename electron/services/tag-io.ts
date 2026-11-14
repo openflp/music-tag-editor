@@ -209,6 +209,10 @@ function resultFromError(filePath: string, error: unknown): WriteResult {
   return { path: filePath, ok: false, code: 'unknown', error: message }
 }
 
+function mimeFor(filePath: string): string {
+  return `taglib/${extname(filePath).slice(1).toLowerCase()}`
+}
+
 function samePath(a: string, b: string): boolean {
   const left = resolve(a)
   const right = resolve(b)
@@ -234,7 +238,7 @@ export async function writeTrack(job: WriteJob): Promise<WriteResult> {
       return { path: job.path, ok: false, code: 'invalid', error: 'Файл с таким именем уже есть' }
     }
     await copyFile(job.path, tempPath)
-    const file = File.createFromPath(tempPath)
+    const file = File.createFromPath(tempPath, mimeFor(job.path))
     try {
       applyPatch(file, job)
       file.save()

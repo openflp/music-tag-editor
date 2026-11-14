@@ -192,7 +192,7 @@ export function App() {
         <div className={sidebarOpen ? 'workspace' : 'workspace sidebar-closed'}>
           <TrackSidebar loading={loading} collapsed={!sidebarOpen} />
           <SidebarResizer width={sidebar} onWidth={setSidebar} collapsed={!sidebarOpen} />
-          <div className="editor">
+          <div className={playerOpen ? 'editor player-on' : 'editor'}>
             {hasTracks ? (
               <>
                 <TrackHeader />

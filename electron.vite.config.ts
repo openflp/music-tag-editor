@@ -17,6 +17,19 @@ function copyTitlebarTheme() {
   }
 }
 
+function keepDevWatcherAlive() {
+  return {
+    name: 'keep-dev-watcher-alive',
+    configureServer(server) {
+      server.watcher.on('error', (error: Error & { code?: string }) => {
+        const code = error.code
+        if (code === 'EBUSY' || code === 'EPERM' || code === 'EACCES' || code === 'ENOENT') return
+        server.config.logger.error(`[watcher] ${error.message}`)
+      })
+    }
+  }
+}
+
 export default defineConfig({
   main: {
     plugins: [externalizeDepsPlugin(), copyTitlebarTheme()],
@@ -66,6 +79,6 @@ export default defineConfig({
         '@shared': resolve('shared')
       }
     },
-    plugins: [react(), tailwindcss()]
+    plugins: [keepDevWatcherAlive(), react(), tailwindcss()]
   }
 })

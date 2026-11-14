@@ -217,7 +217,7 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
         onFocusOutside={keepSelect}
       >
         <header className="settings-bar">
-          <img className="settings-app-icon" alt="" src="app-icon.svg" />
+          <img className="settings-app-icon" alt="" src="icon.png" />
           <DialogTitle>{pack.settings}</DialogTitle>
           <button type="button" className="icon-btn settings-close" aria-label={pack.close} onClick={onClose}>
             <CloseIcon />

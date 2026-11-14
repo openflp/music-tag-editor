@@ -192,6 +192,7 @@ export interface AppSettingsSnapshot {
 }
 
 export const REPOSITORY_URL = 'https://github.com/openflp/music-tag-editor'
+export const ISSUES_URL = 'https://github.com/openflp/music-tag-editor/issues/new'
 
 export const IPC = {
   openFiles: 'files:open',
@@ -216,6 +217,8 @@ export const IPC = {
   openPath: 'shell:open',
   openDir: 'shell:open-dir',
   openRepository: 'shell:open-repository',
+  openIssues: 'shell:open-issues',
+  reloadWindow: 'window:reload',
   setLocale: 'app:locale',
   getAppSettings: 'app:settings-get',
   setAppSettings: 'app:settings-set',

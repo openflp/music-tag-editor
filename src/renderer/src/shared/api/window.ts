@@ -26,6 +26,8 @@ export interface MusicApi {
   openPath: (path: string) => Promise<void>
   openDir: (path: string) => Promise<void>
   openRepository: () => Promise<void>
+  openIssues: (details: string) => Promise<void>
+  reloadWindow: () => Promise<void>
   setLocale: (locale: LocaleId) => Promise<void>
   getAppSettings: () => Promise<AppSettingsSnapshot>
   setAppSettings: (patch: Partial<AppSettings>) => Promise<AppSettingsSnapshot>

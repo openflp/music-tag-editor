@@ -18,7 +18,7 @@ function resolveTitlebarIconUrl(): string | undefined {
   try {
     const href = (globalThis as { location?: { href: string } }).location?.href
     if (!href) return undefined
-    return new URL('app-icon.svg', href).href
+    return new URL('icon.png', href).href
   } catch {
     return undefined
   }

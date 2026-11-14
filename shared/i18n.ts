@@ -406,7 +406,13 @@ const ru = {
   errSaved: 'Сохранено',
   errSave: 'Не удалось сохранить',
   errCopySaved: 'Копия сохранена',
-  errCopyFail: 'Не удалось сохранить копию'
+  errCopyFail: 'Не удалось сохранить копию',
+  crashTitle: 'Непредвиденная ошибка',
+  crashLead: 'Окно остановилось из-за ошибки, которую не удалось обработать. Ниже написано, что произошло. Этот текст можно отправить в репозиторий.',
+  crashDetails: 'Что произошло',
+  crashReload: 'Перезагрузить',
+  crashReport: 'Сообщить на GitHub',
+  crashUnknown: 'Неизвестная ошибка'
 }
 
 export type Pack = typeof ru
@@ -817,7 +823,13 @@ const en: Pack = {
   errSaved: 'Saved',
   errSave: 'Could not save',
   errCopySaved: 'Copy saved',
-  errCopyFail: 'Could not save the copy'
+  errCopyFail: 'Could not save the copy',
+  crashTitle: 'Unexpected error',
+  crashLead: 'The window stopped because of an error it could not handle. What happened is written below. You can send this text to the repository.',
+  crashDetails: 'What happened',
+  crashReload: 'Reload',
+  crashReport: 'Report on GitHub',
+  crashUnknown: 'Unknown error'
 }
 
 export function packFor(locale: LocaleId): Pack {

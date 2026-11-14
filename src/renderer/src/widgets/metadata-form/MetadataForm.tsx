@@ -243,7 +243,7 @@ export function MetadataForm() {
           <TabsTrigger value="detail" className="sheet-tab">{pack.tabInfo}</TabsTrigger>
           <TabsTrigger value="file" className="sheet-tab">{pack.tabFile}</TabsTrigger>
         </TabsList>
-      <TabsContent value="main" className="groups">
+      <TabsContent value="main" className="groups main-pane">
         <FieldGroup
           title={pack.groupTrack}
           asideTitle={pack.cover}

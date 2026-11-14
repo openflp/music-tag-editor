@@ -46,7 +46,7 @@ function makeEnvelope(read: () => { audio: HTMLAudioElement | null; level: numbe
   const paint = () => {
     const { audio, level } = read()
     if (!audio) return
-    // ИЗМЕНЕНО: квадратичная кривая под восприятие громкости (было level * heard())
+    // ИЗМЕНЕНО: появление и затухание идут по квадратичной кривой (было level * heard()); ползунок громкости остаётся линейным
     const fade = heard()
     audio.volume = clamp01(level * fade * fade)
   }

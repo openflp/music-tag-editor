@@ -1,6 +1,6 @@
 import { statSync } from 'node:fs'
 import { extname, resolve } from 'node:path'
-import { AUDIO_EXTENSIONS, IMAGE_EXTENSIONS, MAX_COVER_BYTES, MAX_FILES, MAX_LYRICS_CHARS, MENU_BAR_MODES, REPOSITORY_URL, ZOOM_STEPS, type AppSettings, type CoverArt, type MenuBarMode, type WriteJob, type ZoomStep } from '@shared/types'
+import { AUDIO_EXTENSIONS, IMAGE_EXTENSIONS, ISSUES_URL, MAX_COVER_BYTES, MAX_FILES, MAX_LYRICS_CHARS, MENU_BAR_MODES, REPOSITORY_URL, ZOOM_STEPS, type AppSettings, type CoverArt, type MenuBarMode, type WriteJob, type ZoomStep } from '@shared/types'
 
 const AUDIO = new Set<string>(AUDIO_EXTENSIONS)
 const IMAGES = new Set<string>(IMAGE_EXTENSIONS)
@@ -38,6 +38,24 @@ export function assertDirectoryPath(value: unknown): string {
 export function assertRepositoryUrl(value: unknown): string {
   if (value !== REPOSITORY_URL) throw new InputError('Некорректная ссылка')
   return REPOSITORY_URL
+}
+
+const ISSUES_PATH = '/openflp/music-tag-editor/issues/new'
+
+export function issueReportUrl(value: unknown, title: string): string {
+  const url = new URL(ISSUES_URL)
+  const heading = title.replace(/[\u0000-\u001f]/g, ' ').trim().slice(0, 120) || 'Unexpected error'
+  url.searchParams.set('title', heading)
+  if (typeof value === 'string') {
+    const body = value.replace(/\u0000/g, '').trim().slice(0, 3500)
+    if (body) url.searchParams.set('body', body)
+  } else if (value != null) {
+    throw new InputError('Некорректная ссылка')
+  }
+  if (url.origin !== 'https://github.com' || url.pathname !== ISSUES_PATH) {
+    throw new InputError('Некорректная ссылка')
+  }
+  return url.toString()
 }
 
 export function assertCloseConfirm(value: unknown): true {
