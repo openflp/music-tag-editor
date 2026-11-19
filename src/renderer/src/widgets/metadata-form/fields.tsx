@@ -94,7 +94,7 @@ export function CompositeField({ label, value, mixed, disabled, onChange, combo,
             >
               <Command>
                 <CommandInput ref={searchRef} onValueChange={setQuery} placeholder={pack.historySearch} aria-label={pack.historySearch} />
-                <AxisScroll watch={`${query}:${options.length}:${historyOptions.length}`}>
+                <AxisScroll watch={`${query}:${options.length}:${historyOptions.length}`} shade>
                   {(ref) => (
                 <CommandList ref={ref} className="cmd-scroll-body">
                   <CommandEmpty>{pack.nothingFound}</CommandEmpty>

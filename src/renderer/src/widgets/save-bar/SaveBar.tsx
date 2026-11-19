@@ -282,7 +282,7 @@ function HistoryButton({
         >
           <Command>
             <CommandInput ref={searchRef} onValueChange={setQuery} placeholder={pack.historySearch} aria-label={pack.historySearch} />
-            <AxisScroll watch={`${query}:${steps.length}`}>
+            <AxisScroll watch={`${query}:${steps.length}`} shade>
               {(ref) => (
                 <CommandList ref={ref} className="cmd-scroll-body">
                   <CommandEmpty>{pack.nothingFound}</CommandEmpty>
@@ -454,7 +454,19 @@ export function TrackHeader() {
   )
 }
 
-function statusSession(saving: boolean, total: number | null, errors: { path: string; error: string; code?: string }[]): string {
+const STATUS_HIDE_MS = 800
+
+type StatusError = { path: string; error: string; code?: string }
+
+type StatusFrame = {
+  tone: 'err' | 'busy'
+  left: string
+  failed: boolean
+  progress: { current: number; total: number } | null
+  errors: StatusError[]
+}
+
+function statusSession(saving: boolean, total: number | null, errors: StatusError[]): string {
   if (errors.length) return `err:${errors.map((item) => `${item.path}\0${item.code ?? ''}\0${item.error}`).join('\n')}`
   if (total !== null) return `write:${total}`
   if (saving) return 'save'
@@ -469,18 +481,53 @@ export function SidebarStatus() {
   const [expanded, setExpanded] = useState(false)
   const [closed, setClosed] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
+  const [open, setOpen] = useState(false)
+  const [shown, setShown] = useState<StatusFrame | null>(null)
   const sheetRef = useRef<CSSStyleSheet | null>(null)
   const copiedTimer = useRef(0)
+  const hideTimer = useRef(0)
+  const openRef = useRef(false)
   const session = statusSession(saving, progress ? progress.total : null, writeErrors)
-  const open = Boolean(session) && closed !== session
+  const live = Boolean(session) && closed !== session
   const failed = writeErrors.length > 0
-  const tone = failed ? 'err' : 'busy'
-  const ratio = progress && progress.total > 0 ? Math.min(1, progress.current / progress.total) : 0
   const left = progress ? pack.writing(progress.current, progress.total) : failed ? (writeErrors.length === 1 ? pack.writeOneFail : pack.writeManyFail(writeErrors.length)) : pack.saving
+  const view = shown
+  const tone = view?.tone ?? 'busy'
+  const ratio = view?.progress && view.progress.total > 0 ? Math.min(1, view.progress.current / view.progress.total) : 0
 
   useEffect(() => {
-    if (!failed) setExpanded(false)
-  }, [failed])
+    window.clearTimeout(hideTimer.current)
+    if (live) {
+      setShown({
+        tone: failed ? 'err' : 'busy',
+        left,
+        failed,
+        progress: progress ? { current: progress.current, total: progress.total } : null,
+        errors: writeErrors
+      })
+      openRef.current = true
+      setOpen(true)
+      return
+    }
+    if (!openRef.current || closed === session) {
+      openRef.current = false
+      setOpen(false)
+      return
+    }
+    hideTimer.current = window.setTimeout(() => {
+      openRef.current = false
+      setOpen(false)
+    }, STATUS_HIDE_MS)
+    return () => window.clearTimeout(hideTimer.current)
+  }, [live, session, closed, failed, left, progress, writeErrors])
+
+  useEffect(() => {
+    return () => window.clearTimeout(hideTimer.current)
+  }, [])
+
+  useEffect(() => {
+    if (!view?.failed) setExpanded(false)
+  }, [view?.failed])
 
   useLayoutEffect(() => {
     if (!sheetRef.current) {
@@ -505,7 +552,7 @@ export function SidebarStatus() {
   }, [])
 
   const copyErrors = () => {
-    const text = writeErrors.map((item) => `${baseName(item.path)} — ${item.error}`).join('\n')
+    const text = (view?.errors ?? []).map((item) => `${baseName(item.path)} — ${item.error}`).join('\n')
     if (!text) return
     void navigator.clipboard.writeText(text).then(() => {
       setCopied(true)
@@ -524,9 +571,9 @@ export function SidebarStatus() {
     >
       <div className="side-status-row">
         <span className="status-dot" aria-hidden="true" />
-        <FadeText>{left}</FadeText>
+        <FadeText>{view?.left ?? ''}</FadeText>
         <div className="side-status-actions">
-          {failed ? (
+          {view?.failed ? (
             <button
               type="button"
               className={copied ? 'icon-btn copy-swap copied' : 'icon-btn copy-swap'}
@@ -541,7 +588,7 @@ export function SidebarStatus() {
               </span>
             </button>
           ) : null}
-          {failed ? (
+          {view?.failed ? (
             <Hint label={expanded ? pack.collapseErrors : pack.showErrors}>
               <button
                 type="button"
@@ -561,25 +608,25 @@ export function SidebarStatus() {
           </Hint>
         </div>
       </div>
-      <div className={progress ? 'side-progress-slot on' : 'side-progress-slot'}>
+      <div className={view?.progress ? 'side-progress-slot on' : 'side-progress-slot'}>
         <div>
           <div
             className="side-progress"
             role="progressbar"
-            aria-valuenow={progress?.current ?? 0}
+            aria-valuenow={view?.progress?.current ?? 0}
             aria-valuemin={0}
-            aria-valuemax={progress?.total ?? 0}
+            aria-valuemax={view?.progress?.total ?? 0}
             aria-label={pack.writeProgress}
           >
             <span className="side-progress-fill" />
           </div>
         </div>
       </div>
-      {failed ? (
+      {view?.failed ? (
         <div className="side-status-panel">
           <div>
-            <ErrorScroll watch={writeErrors.length}>
-              {writeErrors.map((item) => (
+            <ErrorScroll watch={view.errors.length}>
+              {view.errors.map((item) => (
                 <li key={item.path}>
                   <span>
                     {baseName(item.path)} — {tr(item.error)}

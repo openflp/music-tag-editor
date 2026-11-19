@@ -142,19 +142,19 @@ export const RepeatIcon = icon(IconRepeat)
 export const RepeatOneIcon = icon(IconRepeatOnce)
 export const SkipPrevIcon = icon(IconPlayerSkipBackFilled, 18, 0)
 export const SkipNextIcon = icon(IconPlayerSkipForwardFilled, 18, 0)
-export const MenuIcon = forwardRef<SVGSVGElement, AppIconProps>(function MenuIcon({ size = 16, ...props }, ref) {
+export const MenuIcon = forwardRef<SVGSVGElement, Omit<AppIconProps, 'size' | 'stroke'>>(function MenuIcon(props, ref) {
   return (
     <svg
       ref={ref}
       xmlns="http://www.w3.org/2000/svg"
-      width={size}
-      height={size}
-      viewBox="0 0 16 16"
+      viewBox="0 0 12 9"
       fill="none"
       aria-hidden="true"
       {...props}
+      width={12}
+      height={9}
     >
-      <path d="M3.2 4.2h9.6M3.2 8h9.6M3.2 11.8h9.6" stroke="currentColor" strokeWidth="2.15" strokeLinecap="round" />
+      <path d="M0 0.5h12M0 4.5h12M0 8.5h12" stroke="currentColor" strokeWidth="1" />
     </svg>
   )
 })

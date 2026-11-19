@@ -207,7 +207,7 @@ function IconMenu({ onPalette }: { onPalette: () => void }) {
   return (
     <Menubar className="mte-titlebar-menubar is-icon" aria-label={pack.menuApp} value={openMenu} onValueChange={setOpenMenu}>
       <MenubarMenu value="overflow">
-        <MenubarTrigger className="mte-menu-overflow" data-menu="overflow" aria-label={pack.menuOverflow}>
+        <MenubarTrigger className="mte-menu-overflow is-menu" data-menu="overflow" aria-label={pack.menuOverflow}>
           <MenuIcon />
         </MenubarTrigger>
         <MenubarContent className="mte-menubar-content" alignOffset={0} sideOffset={4}>
@@ -303,7 +303,7 @@ function BarMenu({ onPalette }: { onPalette: () => void }) {
       })}
       <MenubarMenu value="overflow">
         <MenubarTrigger
-          className="mte-menu-overflow"
+          className={hamburger ? 'mte-menu-overflow is-menu' : 'mte-menu-overflow'}
           data-menu="overflow"
           aria-label={hamburger ? pack.menuOverflow : pack.menuMore}
           style={{ display: hasOverflow ? undefined : 'none' }}
