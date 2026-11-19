@@ -179,20 +179,10 @@ function ToolMenu({
   )
 }
 
-function TrackMenu({
-  path,
-  picked,
-  group,
-  broken,
-  children
-}: {
-  path: string
-  picked: boolean
-  group: boolean
-  broken: boolean
-  children: ReactNode
-}) {
-  const select = useEditor((state) => state.select)
+// Одно контекстное меню на весь список (аудит A1). ContextMenuContent всегда держит
+// Portal + Presence; меню на каждой из 32+ строк давало 64 вложенных dispatch на первом
+// коммите и «Maximum update depth exceeded». Здесь меню одно, а путь строки берётся в момент ПКМ.
+function TrackMenuContent({ path, group, broken }: { path: string | null; group: boolean; broken: boolean }) {
   const remove = useEditor((state) => state.remove)
   const removeSelected = useEditor((state) => state.removeSelected)
   const revealFile = useEditor((state) => state.revealFile)
@@ -200,42 +190,36 @@ function TrackMenu({
   const requestPlay = useEditor((state) => state.requestPlay)
   const nowPlaying = useEditor((state) => state.nowPlaying)
   const { pack } = useI18n()
+  if (!path) return null
   const playing = nowPlaying === path
   return (
-    <ContextMenu
-      onOpenChange={(open) => {
-        if (open && !picked) select(path, 'single')
-      }}
-    >
-      <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
-      <ContextMenuContent>
-        <ContextMenuItem disabled={broken} onSelect={() => requestPlay(path)}>
-          {playing ? <PauseIcon /> : <PlayIcon />}
-          {playing ? pack.pause : pack.play}
-        </ContextMenuItem>
-        <ContextMenuItem onSelect={() => void revealFile(path)}>
-          <FolderOutIcon />
-          {pack.revealFile}
-        </ContextMenuItem>
-        <ContextMenuItem onSelect={() => void openFile(path)}>
-          <FileIcon />
-          {pack.openFile}
-        </ContextMenuItem>
-        <ContextMenuItem onSelect={() => void copyTracks('files', path)}>
-          <CopyIcon />
-          {group ? pack.copyFiles : pack.copyFile}
-        </ContextMenuItem>
-        <ContextMenuItem onSelect={() => void copyTracks('paths', path)}>
-          <CopyIcon />
-          {group ? pack.copyPaths : pack.copyPath}
-        </ContextMenuItem>
-        <ContextMenuSeparator />
-        <ContextMenuItem variant="destructive" onSelect={() => (group ? removeSelected() : remove(path))}>
-          <TrashIcon />
-          {group ? pack.removeMany : pack.removeOne}
-        </ContextMenuItem>
-      </ContextMenuContent>
-    </ContextMenu>
+    <ContextMenuContent>
+      <ContextMenuItem disabled={broken} onSelect={() => requestPlay(path)}>
+        {playing ? <PauseIcon /> : <PlayIcon />}
+        {playing ? pack.pause : pack.play}
+      </ContextMenuItem>
+      <ContextMenuItem onSelect={() => void revealFile(path)}>
+        <FolderOutIcon />
+        {pack.revealFile}
+      </ContextMenuItem>
+      <ContextMenuItem onSelect={() => void openFile(path)}>
+        <FileIcon />
+        {pack.openFile}
+      </ContextMenuItem>
+      <ContextMenuItem onSelect={() => void copyTracks('files', path)}>
+        <CopyIcon />
+        {group ? pack.copyFiles : pack.copyFile}
+      </ContextMenuItem>
+      <ContextMenuItem onSelect={() => void copyTracks('paths', path)}>
+        <CopyIcon />
+        {group ? pack.copyPaths : pack.copyPath}
+      </ContextMenuItem>
+      <ContextMenuSeparator />
+      <ContextMenuItem variant="destructive" onSelect={() => (group ? removeSelected() : remove(path))}>
+        <TrashIcon />
+        {group ? pack.removeMany : pack.removeOne}
+      </ContextMenuItem>
+    </ContextMenuContent>
   )
 }
 
@@ -256,7 +240,11 @@ export function TrackSidebar({ loading, collapsed = false }: { loading: boolean;
   const selectDelta = useEditor((state) => state.selectDelta)
   const setListOrder = useEditor((state) => state.setListOrder)
   const focus = useEditor((state) => state.focus)
+  const saving = useEditor((state) => state.saving)
   const [refreshing, setRefreshing] = useState(false)
+  // путь строки, на которой открыто контекстное меню (ref — для обработчика, state — для рендера)
+  const menuPathRef = useRef<string | null>(null)
+  const [menuPath, setMenuPath] = useState<string | null>(null)
   const { pack } = useI18n()
   const showFormat = usePrefs().showFormatBadges
   const sorts: { id: SideSort; label: string; icon: ReactNode }[] = [
@@ -299,6 +287,11 @@ export function TrackSidebar({ loading, collapsed = false }: { loading: boolean;
     above: 0,
     defer: false
   })
+
+  const menuBroken = useMemo(
+    () => (menuPath ? Boolean(tracks.find((track) => track.path === menuPath)?.error) : false),
+    [menuPath, tracks]
+  )
 
   const visible = useMemo(() => {
     if (sort === 'open') return tracks
@@ -497,7 +490,9 @@ export function TrackSidebar({ loading, collapsed = false }: { loading: boolean;
     })
   } else if (!samePaths(motion.paths, nextPaths)) {
     if (sameFiles(motion.paths, nextPaths)) {
-      setMotion({ ...motion, paths: nextPaths, exits: [], above: 0 })
+      // тот же состав, другой порядок (сортировка): анимации входа/выхода тут не нужны,
+      // иначе перемещённые узлы заново проигрывают track-in
+      setMotion({ ...motion, paths: nextPaths, entered: new Set(), exits: [], above: 0, defer: false })
     } else {
       const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches
       const previous = new Set(motion.paths)
@@ -546,7 +541,7 @@ export function TrackSidebar({ loading, collapsed = false }: { loading: boolean;
   const anchorShown = anchor !== null && rows.some((row) => row.track.path === anchor)
 
   const reload = () => {
-    if (refreshing) return
+    if (refreshing || saving) return
     setRefreshing(true)
     const started = performance.now()
     void (async () => {
@@ -585,7 +580,7 @@ export function TrackSidebar({ loading, collapsed = false }: { loading: boolean;
             type="button"
             className="icon-btn"
             aria-label={pack.refresh}
-            disabled={(!tracks.length && !sourceDir) || spinning}
+            disabled={(!tracks.length && !sourceDir) || spinning || saving}
             onClick={reload}
           >
             <RefreshIcon />
@@ -672,7 +667,32 @@ export function TrackSidebar({ loading, collapsed = false }: { loading: boolean;
       <div className="list-scroll">
       <div className={edges.top ? 'list-edge top on' : 'list-edge top'} />
       {!tracks.length && !motion.exits.length ? <div className="list-empty">{loading ? pack.reading : pack.emptyList}</div> : null}
-      <ul ref={listRef} className={motion.defer && motion.entered.size ? 'track-list defer-in' : 'track-list'} role="listbox" aria-multiselectable="true" aria-label={pack.tracks}>
+      <ContextMenu
+        onOpenChange={(open) => {
+          const path = menuPathRef.current
+          if (open && path && !useEditor.getState().selected.includes(path)) select(path, 'single')
+        }}
+      >
+      <ContextMenuTrigger asChild>
+      <ul
+        ref={listRef}
+        className={motion.defer && motion.entered.size ? 'track-list defer-in' : 'track-list'}
+        role="listbox"
+        aria-multiselectable="true"
+        aria-label={pack.tracks}
+        onContextMenu={(event) => {
+          const target = event.target
+          const row = target instanceof Element ? target.closest('.track-row') : null
+          const path = row instanceof HTMLElement ? row.dataset.path : undefined
+          if (!path) {
+            // ПКМ мимо строки: меню не открываем (Radix пропускает свой обработчик при defaultPrevented)
+            event.preventDefault()
+            return
+          }
+          menuPathRef.current = path
+          setMenuPath(path)
+        }}
+      >
         {rows.map(({ track, leaving }, i) => {
           const active = picked.has(track.path)
           const motionClass = leaving ? 'track-out' : motion.entered.has(track.path) ? 'track-in' : ''
@@ -691,7 +711,6 @@ export function TrackSidebar({ loading, collapsed = false }: { loading: boolean;
               inert={leaving ? true : undefined}
             >
               <div className="track-clip">
-              <TrackMenu path={track.path} picked={active} group={active && selected.length > 1} broken={Boolean(track.error)}>
               <button
                 type="button"
                 role="option"
@@ -741,12 +760,14 @@ export function TrackSidebar({ loading, collapsed = false }: { loading: boolean;
                   </span>
                 </span>
               </button>
-              </TrackMenu>
               </div>
             </li>
           )
         })}
       </ul>
+      </ContextMenuTrigger>
+      <TrackMenuContent path={menuPath} group={menuPath !== null && picked.has(menuPath) && selected.length > 1} broken={menuBroken} />
+      </ContextMenu>
       <div className={edges.bottom ? 'list-edge bottom on' : 'list-edge bottom'} />
       {overflow ? (
         <div ref={railRef} className={barOn ? 'list-rail live' : 'list-rail'}>

@@ -21,6 +21,7 @@ import { shownTrackArtist, shownTrackTitle, trackDirty } from '@shared/plan'
 import { useShortcut } from '@/features/settings/prefs'
 import { fileWord, useI18n } from '@/shared/i18n'
 import type { DropMode } from '@/features/editor/lib/drop'
+import { readSidebarWidth } from './sidebar-layout'
 
 export { TitleBar } from './titlebar'
 
@@ -40,8 +41,15 @@ function paintSidebar(width: number): number {
   return next
 }
 
+// --sbw должен существовать уже на первом кадре. Иначе у закрытого sidebar
+// margin-right: calc(var(--sbw) * -1) сначала невалиден (= 0), а после useEffect
+// «доезжает» до -ширины — при запуске с закрытым sidebar было видно движение.
+paintSidebar(readSidebarWidth())
+
 const PAGE = 48
 const PALETTE_LIMIT = 80
+// сколько держим содержимое палитры живым после закрытия — чуть дольше анимации закрытия (.command-glass, 260–300мс)
+const PALETTE_EXIT_MS = 320
 const EMPTY_TRACKS: TrackVm[] = []
 
 const TAB_IDS = ['all', 'files', 'dirty', 'commands'] as const
@@ -91,8 +99,20 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
     { id: 'dirty' as const, label: pack.changed },
     { id: 'commands' as const, label: pack.commands }
   ]
-  const tracks = useEditor((state) => (open ? state.tracks : EMPTY_TRACKS))
-  const plan = useEditor((state) => (open ? editorPlan(state) : null))
+  // active = открыта ИЛИ ещё проигрывает анимацию закрытия: пока окно тает,
+  // список, текст и вкладка остаются как были, а не очищаются раньше времени
+  const [live, setLive] = useState(open)
+  useEffect(() => {
+    if (open) {
+      setLive(true)
+      return
+    }
+    const id = window.setTimeout(() => setLive(false), PALETTE_EXIT_MS)
+    return () => window.clearTimeout(id)
+  }, [open])
+  const active = open || live
+  const tracks = useEditor((state) => (active ? state.tracks : EMPTY_TRACKS))
+  const plan = useEditor((state) => (active ? editorPlan(state) : null))
   const select = useEditor((state) => state.select)
   const openDialog = useEditor((state) => state.openDialog)
   const saveAll = useEditor((state) => state.requestSave)
@@ -127,10 +147,10 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
   const q = query.trim()
   const labels = useMemo(() => {
     const map = new Map<string, ReturnType<typeof labelOf>>()
-    if (!open) return map
+    if (!active) return map
     for (const track of tracks) map.set(track.path, labelOf(track, plan))
     return map
-  }, [open, tracks, plan])
+  }, [active, tracks, plan])
   const labelFor = (track: TrackVm) => labels.get(track.path) ?? labelOf(track, plan)
   const rankedFiles = rankRows(files, q, (track) => {
     const label = labelFor(track)
@@ -149,12 +169,13 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
     return () => window.clearTimeout(id)
   }, [open, shown, files.length, q])
 
+  // сброс — только когда окно уже полностью закрыто (после анимации)
   useEffect(() => {
-    if (open) return
+    if (active) return
     setQuery('')
     setTab('all')
     setShown(PAGE)
-  }, [open])
+  }, [active])
 
   useEffect(() => {
     document.querySelector('.command-glass .cmd-results .cmd-scroll-body')?.scrollTo({ top: 0 })
@@ -391,12 +412,15 @@ export function SidebarResizer({ width, onWidth, collapsed = false }: { width: n
       onKeyDown={(event) => {
         if (event.key === 'Home' || event.key === 'End') {
           event.preventDefault()
+          // не пускаем наверх: глобальный Home/End в use-bindings иначе ещё и выделяет первый/последний трек (аудит H3)
+          event.stopPropagation()
           onWidth(commit(event.key === 'Home' ? SIDEBAR_MIN : SIDEBAR_MAX, event.currentTarget))
           return
         }
         const step = event.key === 'ArrowLeft' ? -16 : event.key === 'ArrowRight' ? 16 : 0
         if (!step) return
         event.preventDefault()
+        event.stopPropagation()
         onWidth(commit(live.current + step, event.currentTarget))
       }}
       onPointerDown={(event) => {

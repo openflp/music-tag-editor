@@ -1,4 +1,4 @@
-import { useId, useMemo, useRef, useState, type ChangeEvent, type KeyboardEvent, type ReactNode } from 'react'
+import { useEffect, useId, useMemo, useRef, useState, type ChangeEvent, type KeyboardEvent, type ReactNode } from 'react'
 import { Popover } from 'radix-ui'
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandSeparator } from '@/components/ui/command'
 import { Hint } from '@/components/ui/tooltip'
@@ -29,6 +29,13 @@ export function CompositeField({ label, value, mixed, disabled, onChange, combo,
   const id = useId()
   const searchRef = useRef<HTMLInputElement>(null)
   const [open, setOpen] = useState(false)
+  // Portal/Content монтируем только после первого открытия (аудит G4): закрытый Radix Popover с
+  // постоянно смонтированным Content держит лишние Presence и приближает порог «Maximum update depth».
+  // После первого открытия остаётся смонтированным, чтобы работала анимация закрытия.
+  const [armed, setArmed] = useState(false)
+  useEffect(() => {
+    if (open) setArmed(true)
+  }, [open])
   const [query, setQuery] = useState('')
   const fileValues = useMemo(() => options.map((item) => item.value), [options])
   const historyOptions = useMemo(() => historyChoices(history, fileValues, ''), [history, fileValues])
@@ -78,7 +85,7 @@ export function CompositeField({ label, value, mixed, disabled, onChange, combo,
             ) : null}
           </div>
         </Popover.Anchor>
-        {combo ? (
+        {combo && (open || armed) ? (
           <Popover.Portal>
             <Popover.Content
               className="hist-menu"

@@ -230,6 +230,11 @@ function HistoryButton({
   const { pack } = useI18n()
   const searchRef = useRef<HTMLInputElement>(null)
   const [open, setOpen] = useState(false)
+  // Portal/Content монтируем только после первого открытия (аудит G4), дальше он остаётся — ради анимации закрытия
+  const [armed, setArmed] = useState(false)
+  useEffect(() => {
+    if (open) setArmed(true)
+  }, [open])
   const [query, setQuery] = useState('')
   const name = label.split(' · ')[0]
   return (
@@ -267,6 +272,7 @@ function HistoryButton({
           </button>
         </Popover.Anchor>
       </Hint>
+      {open || armed ? (
       <Popover.Portal>
         <Popover.Content
           className="hist-menu"
@@ -307,6 +313,7 @@ function HistoryButton({
           </Command>
         </Popover.Content>
       </Popover.Portal>
+      ) : null}
     </Popover.Root>
   )
 }

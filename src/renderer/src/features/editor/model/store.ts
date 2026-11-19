@@ -191,6 +191,30 @@ function toVm(snapshot: TrackSnapshot): TrackVm {
   }
 }
 
+// Обновление с диска не должно терять несохранённый ввод (аудит B3): поля, которые пользователь
+// успел изменить (draft != original), и изменённая обложка остаются, всё остальное берётся с диска.
+function mergeRefreshed(track: TrackVm, snapshot: TrackSnapshot): TrackVm {
+  const next = toVm(snapshot)
+  const draft: TrackTags = { ...next.draft }
+  const keep = <K extends keyof TrackTags>(key: K): void => {
+    if (track.draft[key] !== track.original[key]) draft[key] = track.draft[key]
+  }
+  for (const key of Object.keys(draft) as (keyof TrackTags)[]) keep(key)
+  const coverEdited = track.draftCover !== track.originalCover
+  return { ...next, draft, draftCover: coverEdited ? track.draftCover : next.draftCover }
+}
+
+// Ручные номера файлов не должны переживать удаление строки (аудит E4).
+function withoutNumbers(numbers: Record<string, string>, drop: ReadonlySet<string>): Record<string, string> {
+  let changed = false
+  const next: Record<string, string> = {}
+  for (const [path, value] of Object.entries(numbers)) {
+    if (drop.has(path)) changed = true
+    else next[path] = value
+  }
+  return changed ? next : numbers
+}
+
 function planOf(track: TrackVm): PlanTrack {
   return {
     path: track.path,
@@ -438,6 +462,20 @@ function showToast(set: (partial: Partial<EditorState>) => void, toast: Toast): 
   set({ toast: { ...toast, text: tr(toast.text), id: ++toastSeq } })
 }
 
+// Чтения (addPaths / refresh / refreshSource) могут идти одновременно. loading гаснет только когда
+// закончилось ПОСЛЕДНЕЕ из них, иначе первый finally снимает флаг у ещё идущего второго (аудит B4).
+let activeLoads = 0
+
+function beginLoad(set: (partial: Partial<EditorState>) => void): void {
+  activeLoads += 1
+  set({ loading: true })
+}
+
+function endLoad(set: (partial: Partial<EditorState>) => void): void {
+  activeLoads = Math.max(0, activeLoads - 1)
+  if (activeLoads === 0) set({ loading: false })
+}
+
 function historyFromJobs(jobs: WriteJob[]): Partial<HistoryMap> {
   return collectHistory(jobs.map((job) => job.patch))
 }
@@ -492,7 +530,7 @@ export const useEditor = create<EditorState>((set, get) => ({
         }
       })
     }
-    set({ loading: true })
+    beginLoad(set)
     const stop = window.musicTagEditor.onTrackBatch(accept)
     try {
       const snapshots = await window.musicTagEditor.readTags(fresh)
@@ -501,7 +539,7 @@ export const useEditor = create<EditorState>((set, get) => ({
       showToast(set, { kind: 'err', text: error instanceof Error ? error.message : 'Не удалось прочитать файлы' })
     } finally {
       stop()
-      set({ loading: false })
+      endLoad(set)
     }
   },
 
@@ -521,48 +559,65 @@ export const useEditor = create<EditorState>((set, get) => ({
 
   refresh: async () => {
     const current = get().tracks
-    if (!current.length || get().loading || !window.musicTagEditor) return
-    set({ loading: true })
+    if (!current.length || get().loading || get().saving || !window.musicTagEditor) return
+    beginLoad(set)
     try {
-      const snapshots = await window.musicTagEditor.readTags(current.map((track) => track.path))
+      const requested = current.map((track) => track.path)
+      const snapshots = await window.musicTagEditor.readTags(requested)
+      const byPath = new Map<string, TrackSnapshot>()
+      requested.forEach((path, index) => {
+        const snapshot = snapshots[index]
+        if (snapshot) byPath.set(path, snapshot)
+      })
       set((state) => {
-        const tracks = current.map((track, index) => {
-          const snapshot = snapshots[index]
-          return snapshot ? toVm(snapshot) : track
+        // Состав берём ТЕКУЩИЙ, не снятый до await: убранный за время чтения файл не воскресает,
+        // добавленный не пропадает (аудит B3). Несохранённые правки сохраняются (mergeRefreshed).
+        const remap = new Map<string, string>()
+        const tracks = state.tracks.map((track) => {
+          const snapshot = byPath.get(track.path)
+          if (!snapshot) return track
+          const merged = mergeRefreshed(track, snapshot)
+          remap.set(track.path, merged.path)
+          return merged
         })
-        const remap = new Map(current.map((track, index) => [track.path, tracks[index]?.path ?? track.path]))
-        const selected = state.selected
-          .map((path) => remap.get(path) ?? path)
-          .filter((path) => tracks.some((track) => track.path === path))
-        const anchor = state.anchor ? (remap.get(state.anchor) ?? null) : null
+        const present = new Set(tracks.map((track) => track.path))
+        const selected = state.selected.map((path) => remap.get(path) ?? path).filter((path) => present.has(path))
+        const anchor = state.anchor ? (remap.get(state.anchor) ?? state.anchor) : null
         return {
           tracks,
           selected,
           anchor: anchor && selected.includes(anchor) ? anchor : (selected[0] ?? null),
-          writeErrors: state.writeErrors.filter((item) => tracks.some((track) => track.path === item.path))
+          writeErrors: state.writeErrors.filter((item) => present.has(item.path))
         }
       })
     } catch (error) {
       showToast(set, { kind: 'err', text: error instanceof Error ? error.message : 'Не удалось обновить файлы' })
     } finally {
-      set({ loading: false })
+      endLoad(set)
     }
   },
 
   refreshSource: async () => {
     const dir = get().sourceDir
-    if (!dir || get().loading || !window.musicTagEditor) return
-    set({ loading: true })
+    if (!dir || get().loading || get().saving || !window.musicTagEditor) return
+    beginLoad(set)
     try {
       const snapshots = await window.musicTagEditor.readTags([dir])
-      const incoming = snapshots.map(toVm)
       set((state) => {
-        const fresh = new Map(incoming.map((track) => [pathKey(track.path), track]))
+        const fresh = new Map(snapshots.map((snapshot) => [pathKey(snapshot.path), snapshot]))
         const kept = state.tracks
           .filter((track) => !inDir(track.path, dir) || fresh.has(pathKey(track.path)))
-          .map((track) => fresh.get(pathKey(track.path)) ?? track)
-        for (const track of incoming) {
-          if (!kept.some((item) => pathKey(item.path) === pathKey(track.path))) kept.push(track)
+          .map((track) => {
+            const snapshot = fresh.get(pathKey(track.path))
+            // правки в черновиках внутри папки сохраняются (аудит B3)
+            return snapshot ? mergeRefreshed(track, snapshot) : track
+          })
+        const have = new Set(kept.map((track) => pathKey(track.path)))
+        for (const snapshot of snapshots) {
+          const key = pathKey(snapshot.path)
+          if (have.has(key)) continue
+          have.add(key)
+          kept.push(toVm(snapshot))
         }
         const selected = state.selected.filter((path) => kept.some((track) => track.path === path))
         const anchor = state.anchor && selected.includes(state.anchor) ? state.anchor : (selected[0] ?? kept[0]?.path ?? null)
@@ -571,7 +626,7 @@ export const useEditor = create<EditorState>((set, get) => ({
     } catch (error) {
       showToast(set, { kind: 'err', text: error instanceof Error ? error.message : 'Не удалось обновить папку' })
     } finally {
-      set({ loading: false })
+      endLoad(set)
     }
   },
 
@@ -638,7 +693,18 @@ export const useEditor = create<EditorState>((set, get) => ({
       redo: [],
       sourceDir: null,
       writeErrors: [],
-      progress: null
+      progress: null,
+      // шаблон имени, ручные номера, команда play и диалоги не должны переживать очистку (аудит B2):
+      // иначе новая порция файлов сразу «грязная» от старой маски
+      fileMask: '',
+      fileDir: '',
+      fileAll: false,
+      fileNumbers: {},
+      fileNumberSeed: 1,
+      playCommand: null,
+      nowPlaying: null,
+      savePreview: null,
+      resetAsk: false
     })
   },
 
@@ -660,6 +726,7 @@ export const useEditor = create<EditorState>((set, get) => ({
         listOrder,
         anchor: focus,
         focus,
+        fileNumbers: withoutNumbers(state.fileNumbers, new Set([path])),
         writeErrors: state.writeErrors.filter((item) => item.path !== path)
       }
     })
@@ -680,6 +747,7 @@ export const useEditor = create<EditorState>((set, get) => ({
       selected: next ? [next] : [],
       anchor: next,
       focus: next,
+      fileNumbers: withoutNumbers(state.fileNumbers, drop),
       writeErrors: state.writeErrors.filter((item) => !drop.has(item.path))
     })
   },

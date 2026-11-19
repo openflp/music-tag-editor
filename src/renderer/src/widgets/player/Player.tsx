@@ -157,13 +157,21 @@ function blurUnlessKeyboard(input: Element | null | undefined) {
 
 export function Player({ hidden = false }: { hidden?: boolean }) {
   const trackCount = useEditor((state) => state.tracks.length)
-  const pickedCount = useEditor((state) => state.selected.length)
-  const currentPath = useEditor((state) => (state.selected.length === 1 ? state.selected[0] : ''))
+  const soloPath = useEditor((state) => (state.selected.length === 1 ? state.selected[0] : ''))
+  // Ctrl/Shift-клик, который расширяет выделение, уже содержащее играющий трек, не должен рвать
+  // звук и сбрасывать позицию (аудит B1). Пока загруженный трек остаётся в выделении — держим его.
+  const loadedPathRef = useRef('')
+  const keepLoaded = useEditor(
+    (state) => state.selected.length > 1 && loadedPathRef.current !== '' && state.selected.includes(loadedPathRef.current)
+  )
+  const currentPath = soloPath || (keepLoaded ? loadedPathRef.current : '')
+  useEffect(() => {
+    loadedPathRef.current = currentPath
+  }, [currentPath])
   const durationMs = useEditor((state) => {
-    if (state.selected.length !== 1) return 0
-    const path = state.selected[0]
+    if (!currentPath) return 0
     for (const track of state.tracks) {
-      if (track.path === path) return track.tech.durationMs || 0
+      if (track.path === currentPath) return track.tech.durationMs || 0
     }
     return 0
   })
@@ -610,7 +618,7 @@ export function Player({ hidden = false }: { hidden?: boolean }) {
         <button type="button" className="icon-btn player-skip" aria-label={pack.prevFile} disabled={!trackCount || saving} onClick={() => step(-1)}>
           <SkipPrevIcon />
         </button>
-        <button type="button" className={playing ? 'icon-btn player-play on' : 'icon-btn player-play'} aria-label={playing ? pack.pause : pack.play} aria-pressed={playing} disabled={!trackCount || saving || pickedCount !== 1} onClick={() => {
+        <button type="button" className={playing ? 'icon-btn player-play on' : 'icon-btn player-play'} aria-label={playing ? pack.pause : pack.play} aria-pressed={playing} disabled={!trackCount || saving || !currentPath} onClick={() => {
           if (!playing && totalMs > 0 && positionRef.current >= totalMs) {
             const audio = audioRef.current
             if (audio) audio.currentTime = 0
