@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { baseName, formatBadge, formatBitrate, formatBytes, formatDuration, formatRate, formatStamp } from '@/entities/track/lib'
 import { useEditor, type TrackVm } from '@/features/editor/model/store'
 import { camelotOf } from '@shared/key'
@@ -330,8 +330,17 @@ export function InfoPane({ tracks }: { tracks: TrackVm[] }) {
   const notify = useEditor((state) => state.notify)
   const reveal = useEditor((state) => state.revealCurrent)
   const open = useEditor((state) => state.openCurrent)
+  const loadDetails = useEditor((state) => state.loadDetails)
+  // список читается «легко» — полные сведения (facts, encoder, tagTypes) догружаем для выбранных
+  const pendingKey = useMemo(
+    () => tracks.filter((track) => !track.detailed && !track.error).map((track) => track.path).join('\n'),
+    [tracks]
+  )
+  useEffect(() => {
+    if (pendingKey) void loadDetails(pendingKey.split('\n'))
+  }, [pendingKey, loadDetails])
   const [rowIndex, setRowIndex] = useState<number | null>(null)
-  const items = rowsOf(tracks, menuLocaleOf(locale))
+  const items = useMemo(() => rowsOf(tracks, menuLocaleOf(locale)), [tracks, locale])
   const text = report(items)
   const single = tracks.length === 1
   const row = rowIndex === null ? null : items[rowIndex] ?? null
@@ -373,7 +382,7 @@ export function InfoPane({ tracks }: { tracks: TrackVm[] }) {
         </div>
       </div>
       <ContextMenu onOpenChange={(open) => { if (!open) setRowIndex(null) }}>
-        <AxisScroll className="info-scroll" watch={`${tracks.map((track) => track.path).join('\n')}:${items.length}`} shade>
+        <AxisScroll className="info-scroll" watch={`${tracks.length}:${items.length}`} shade>
           {(ref) => (
             <ContextMenuTrigger asChild>
               <div

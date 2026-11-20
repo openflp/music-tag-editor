@@ -1,5 +1,18 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
-import { coverSrc, formatBadge } from '@/entities/track/lib'
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode
+} from 'react'
+import { flushSync } from 'react-dom'
+import { CoverImg } from '@/entities/track/cover-thumb'
+import { formatBadge } from '@/entities/track/lib'
 import { copyPlain, copyTracks } from '@/features/editor/lib/copy'
 import { editorPlan, useEditor, type TrackVm } from '@/features/editor/model/store'
 import { usePrefs } from '@/features/settings/prefs'
@@ -17,8 +30,6 @@ import { FadeText } from '@/shared/ui/fade-text'
 import {
   ArtistIcon,
   CheckIcon,
-  ChevronDownIcon,
-  ChevronUpIcon,
   CopyIcon,
   CreatedIcon,
   DurationIcon,
@@ -41,11 +52,18 @@ import {
 } from '@/shared/ui/icons'
 import { shownTrackArtist, shownTrackTitle, trackDirty } from '@shared/plan'
 import { getLocale, tr, useI18n } from '@/shared/i18n'
+import { contentSpan, thumbBox, virtualRange } from '@/shared/ui/scroll-metrics'
 
 type SideSort = 'open' | 'name' | 'title' | 'artist' | 'created' | 'modified' | 'duration'
 
 const ROW = 46
-const OVERSCAN = 8
+const OVERSCAN = 24
+// padding-bottom у .track-list по умолчанию. Входит в высоту прокрутки, но не в строки.
+// Реальное значение читается в measure(): при открытом статус-баре оно 64 или 160px.
+const LIST_TAIL = 10
+const NO_PATHS: ReadonlySet<string> = new Set()
+// больше стольких новых строк за раз — это «пачка», без анимации появления
+const BULK_ROWS = 24
 const TRACK_MS = 200
 const HEAD_MS = 220
 
@@ -62,6 +80,7 @@ type ListMotion = {
 }
 
 function samePaths(left: readonly string[], right: readonly string[]): boolean {
+  if (left === right) return true
   if (left.length !== right.length) return false
   for (let i = 0; i < left.length; i++) if (left[i] !== right[i]) return false
   return true
@@ -104,16 +123,23 @@ function fileLabel(path: string): string {
   return path.split(/[/\\]/).pop() || path
 }
 
-function compareTracks(left: TrackVm, right: TrackVm, sort: SideSort): number {
-  const text = (a: string, b: string) => a.localeCompare(b, getLocale(), { sensitivity: 'base' })
-  const olderLast = (a: number, b: number) => b - a
-  if (sort === 'name') return text(fileLabel(left.path), fileLabel(right.path))
-  if (sort === 'title') return text(left.draft.title || fileLabel(left.path), right.draft.title || fileLabel(right.path))
-  if (sort === 'artist') return compareArtist(left.draft.artist, right.draft.artist, text)
-  if (sort === 'created') return olderLast(left.tech.createdMs ?? 0, right.tech.createdMs ?? 0)
-  if (sort === 'modified') return olderLast(left.tech.modifiedMs ?? 0, right.tech.modifiedMs ?? 0)
-  if (sort === 'duration') return olderLast(left.tech.durationMs ?? 0, right.tech.durationMs ?? 0)
+// Ключ сортировки считается один раз на трек (O(n)), а не заново на каждое из ~n·log n сравнений:
+// раньше каждое сравнение гоняло regex-split пути и localeCompare с новыми options.
+function sortKey(track: TrackVm, sort: SideSort): string | number {
+  if (sort === 'name') return fileLabel(track.path)
+  if (sort === 'title') return track.draft.title || fileLabel(track.path)
+  if (sort === 'artist') return track.draft.artist
+  if (sort === 'created') return track.tech.createdMs ?? 0
+  if (sort === 'modified') return track.tech.modifiedMs ?? 0
+  if (sort === 'duration') return track.tech.durationMs ?? 0
   return 0
+}
+
+function compareKeys(left: string | number, right: string | number, sort: SideSort, text: (a: string, b: string) => number): number {
+  // даты и длительность: новые/длинные первыми
+  if (typeof left === 'number' || typeof right === 'number') return Number(right) - Number(left)
+  if (sort === 'artist') return compareArtist(left, right, text)
+  return text(left, right)
 }
 
 function toView(track: TrackVm) {
@@ -179,6 +205,88 @@ function ToolMenu({
   )
 }
 
+type RowProps = {
+  track: TrackVm
+  plan: ReturnType<typeof editorPlan>
+  active: boolean
+  leaving: boolean
+  entering: boolean
+  tabIndex: number
+  pos: number
+  size: number
+  showFormat: boolean
+  onPick: (path: string, event: ReactMouseEvent) => void
+}
+
+// Строка списка вынесена в memo: при скролле окно сдвигается на одну строку, и раньше
+// перерисовывались все ~50 видимых строк (с FadeText, shownTrackTitle, trackDirty).
+// Теперь — только вошедшие в окно.
+const TrackRow = memo(function TrackRow({ track, plan, active, leaving, entering, tabIndex, pos, size, showFormat, onPick }: RowProps) {
+  const { pack } = useI18n()
+  const view = toView(track)
+  const title = shownTrackTitle(view, plan)
+  const artist = shownTrackArtist(view, plan)
+  const dirty = isDirty(track, plan)
+  const cover = track.draftCover
+  const motionClass = leaving ? 'track-out' : entering ? 'track-in' : ''
+  return (
+    <li
+      className={motionClass ? `track-item ${motionClass}` : 'track-item'}
+      role="presentation"
+      data-selected={active ? 'true' : 'false'}
+      aria-hidden={leaving ? true : undefined}
+      inert={leaving ? true : undefined}
+    >
+      <div className="track-clip">
+        <button
+          type="button"
+          role="option"
+          aria-selected={active}
+          aria-setsize={size}
+          aria-posinset={pos}
+          tabIndex={tabIndex}
+          data-selected={active ? 'true' : 'false'}
+          draggable
+          data-path={track.path}
+          className={active ? 'track-row selected' : 'track-row'}
+          onClick={(event) => onPick(track.path, event)}
+        >
+          {cover ? (
+            <CoverImg cover={cover} className="thumb" iconSize={16} />
+          ) : (
+            <span className="thumb" aria-hidden="true">
+              <CoverIcon size={16} />
+            </span>
+          )}
+          <span className="track-copy">
+            <span className="track-title">
+              <span className={dirty ? 'head-dirty on' : 'head-dirty'}>
+                <span>
+                  <span
+                    className="dirty"
+                    role={dirty ? 'img' : undefined}
+                    aria-label={dirty ? pack.dirty : undefined}
+                    aria-hidden={dirty ? undefined : true}
+                  />
+                </span>
+              </span>
+              <FadeText>{title}</FadeText>
+            </span>
+            <span className={track.error ? 'track-sub error' : 'track-sub'}>
+              <FadeText>{(track.error ? tr(track.error) : '') || artist || pack.noArtist}</FadeText>
+            </span>
+          </span>
+          <span className={showFormat ? 'track-badge on' : 'track-badge'}>
+            <span>
+              <span className="badge">{formatBadge(track.format)}</span>
+            </span>
+          </span>
+        </button>
+      </div>
+    </li>
+  )
+})
+
 // Одно контекстное меню на весь список (аудит A1). ContextMenuContent всегда держит
 // Portal + Presence; меню на каждой из 32+ строк давало 64 вложенных dispatch на первом
 // коммите и «Maximum update depth exceeded». Здесь меню одно, а путь строки берётся в момент ПКМ.
@@ -237,7 +345,6 @@ export function TrackSidebar({ loading, collapsed = false }: { loading: boolean;
   const openDialog = useEditor((state) => state.openDialog)
   const openFolder = useEditor((state) => state.openFolder)
   const select = useEditor((state) => state.select)
-  const selectDelta = useEditor((state) => state.selectDelta)
   const setListOrder = useEditor((state) => state.setListOrder)
   const focus = useEditor((state) => state.focus)
   const saving = useEditor((state) => state.saving)
@@ -256,7 +363,7 @@ export function TrackSidebar({ loading, collapsed = false }: { loading: boolean;
     { id: 'modified', label: pack.sortModified, icon: SORT_ICON.modified },
     { id: 'duration', label: pack.sortDuration, icon: SORT_ICON.duration }
   ]
-  const picked = new Set(selected)
+  const picked = useMemo(() => new Set(selected), [selected])
   const [sort, setSort] = useState<SideSort>('open')
   const [span, setSpan] = useState({ start: 0, end: 32 })
   const spanRef = useRef(span)
@@ -275,8 +382,12 @@ export function TrackSidebar({ loading, collapsed = false }: { loading: boolean;
   const overList = useRef(false)
   const barOnRef = useRef(false)
   const cssRef = useRef('')
-  const lastPick = useRef(0)
-  const knownTracks = useRef(new Map<string, TrackVm>())
+  const scrollRef = useRef(0)
+  const knownTracks = useRef<readonly TrackVm[]>([])
+  const orderRef = useRef<readonly TrackVm[]>([])
+  const metrics = useRef({ view: 0, rail: 0, tail: LIST_TAIL })
+  const thumbDraw = useRef(0)
+  const thumbRaf = useRef(0)
   const scrollGen = useRef(0)
   const [motion, setMotion] = useState<ListMotion>({
     ready: false,
@@ -288,6 +399,15 @@ export function TrackSidebar({ loading, collapsed = false }: { loading: boolean;
     defer: false
   })
 
+  const pick = useCallback(
+    (path: string, event: ReactMouseEvent) => {
+      if (event.shiftKey) select(path, 'range')
+      else if (event.ctrlKey || event.metaKey) select(path, 'toggle')
+      else select(path, 'single')
+    },
+    [select]
+  )
+
   const menuBroken = useMemo(
     () => (menuPath ? Boolean(tracks.find((track) => track.path === menuPath)?.error) : false),
     [menuPath, tracks]
@@ -295,37 +415,30 @@ export function TrackSidebar({ loading, collapsed = false }: { loading: boolean;
 
   const visible = useMemo(() => {
     if (sort === 'open') return tracks
+    const collator = new Intl.Collator(getLocale(), { sensitivity: 'base' })
     return tracks
-      .map((track, index) => ({ track, index }))
-      .sort((left, right) => compareTracks(left.track, right.track, sort) || left.index - right.index)
+      .map((track, index) => ({ track, index, key: sortKey(track, sort) }))
+      .sort((left, right) => compareKeys(left.key, right.key, sort, collator.compare) || left.index - right.index)
       .map((item) => item.track)
   }, [tracks, sort])
-  const orderKey = useMemo(() => visible.map((track) => track.path).join('\0'), [visible])
+  // Массив путей: пока порядок не изменился, возвращается ТА ЖЕ ссылка. Не нужно join/split
+  // огромной строки, а сравнения ниже (samePaths, deps эффектов) становятся O(1).
+  const pathsRef = useRef<string[]>([])
+  const nextPaths = useMemo(() => {
+    const paths = visible.map((track) => track.path)
+    if (samePaths(pathsRef.current, paths)) return pathsRef.current
+    pathsRef.current = paths
+    return paths
+  }, [visible])
+  orderRef.current = visible
 
   useEffect(() => {
     if (!tracks.length) setSort('open')
   }, [tracks.length])
 
-  const placeThumb = () => {
-    const el = listRef.current
-    if (!el) return
-    const max = el.scrollHeight - el.clientHeight
-    const can = max > 1
-    const top = can && el.scrollTop > 2
-    const bottom = max - el.scrollTop > 16
-    setEdges((prev) => (prev.top === top && prev.bottom === bottom ? prev : { top, bottom }))
-    setOverflow((prev) => (prev === can ? prev : can))
-    const rail = railRef.current
-    const thumb = thumbRef.current
-    if (can && rail && thumb) {
-      const track = rail.clientHeight
-      const height = Math.max(28, Math.min(track, (el.clientHeight / el.scrollHeight) * track))
-      const y = (el.scrollTop / max) * Math.max(0, track - height)
-      thumb.style.height = `${height}px`
-      thumb.style.transform = `translateY(${y}px)`
-    }
-    const pad = spanRef.current.start * ROW
-    const rest = Math.max(0, countRef.current - spanRef.current.end) * ROW
+  const paintSpacers = (start: number, end: number, count: number) => {
+    const pad = start * ROW
+    const rest = Math.max(0, count - end) * ROW
     const css = `.track-list{--list-pad:${pad}px;--list-rest:${rest}px}`
     if (css === cssRef.current) return
     cssRef.current = css
@@ -337,20 +450,57 @@ export function TrackSidebar({ loading, collapsed = false }: { loading: boolean;
     sheetRef.current.replaceSync(css)
   }
 
-  const syncWindow = () => {
+  const drawThumb = () => {
+    const view = metrics.current.view
+    const railH = metrics.current.rail
+    const content = contentSpan(countRef.current, ROW, metrics.current.tail)
+    const scroll = scrollRef.current
+    const max = content - view
+    const can = max > 1 && view > 0
+    const top = can && scroll > 2
+    const bottom = can && max - scroll > 16
+    setEdges((prev) => (prev.top === top && prev.bottom === bottom ? prev : { top, bottom }))
+    setOverflow((prev) => (prev === can ? prev : can))
+    const thumb = thumbRef.current
+    if (!can || !thumb || railH <= 0) return
+    const target = thumbBox(view, content, railH, scroll)
+    let height = target.height
+    // Высота догоняет известное число строк по кадрам. Позиция — от кэшированного scrollTop, без чтения layout.
+    if (!drag.current && thumbDraw.current > 0 && Math.abs(target.height - thumbDraw.current) > 4) {
+      height = thumbDraw.current + (target.height - thumbDraw.current) * 0.35
+      if (Math.abs(height - target.height) > 0.6) scheduleThumb()
+    }
+    thumbDraw.current = height
+    const y = target.max > 0 ? (scroll / target.max) * Math.max(0, railH - height) : 0
+    thumb.style.height = `${height}px`
+    thumb.style.transform = `translateY(${y}px)`
+  }
+
+  const scheduleThumb = () => {
+    if (thumbRaf.current) return
+    thumbRaf.current = requestAnimationFrame(() => {
+      thumbRaf.current = 0
+      drawThumb()
+    })
+  }
+
+  const syncWindow = (flush = false) => {
     const el = listRef.current
     if (!el) return
     const count = countRef.current
-    const start = Math.max(0, Math.floor(el.scrollTop / ROW) - OVERSCAN)
-    const end = Math.min(count, Math.ceil((el.scrollTop + el.clientHeight) / ROW) + OVERSCAN)
+    const view = metrics.current.view || el.clientHeight
+    if (view && metrics.current.view !== view) metrics.current.view = view
+    const next = virtualRange(el.scrollTop, view, count, ROW, OVERSCAN)
+    paintSpacers(next.start, next.end, count)
     const current = spanRef.current
-    if (current.start === start && current.end === end) return
-    setSpan({ start, end })
+    if (current.start === next.start && current.end === next.end) return
+    if (flush) flushSync(() => setSpan(next))
+    else setSpan(next)
   }
 
   const reveal = () => {
-    const el = listRef.current
-    if (!el || el.scrollHeight - el.clientHeight <= 1) return
+    const max = contentSpan(countRef.current, ROW, metrics.current.tail) - metrics.current.view
+    if (max <= 1) return
     if (!barOnRef.current) {
       barOnRef.current = true
       setBarOn(true)
@@ -364,23 +514,40 @@ export function TrackSidebar({ loading, collapsed = false }: { loading: boolean;
     }, 800)
   }
 
-  const latest = useRef({ syncWindow, placeThumb, reveal })
-  latest.current = { syncWindow, placeThumb, reveal }
+  const measure = () => {
+    const el = listRef.current
+    if (el) {
+      metrics.current.view = el.clientHeight
+      // .list-pane:has(.side-status.on) увеличивает padding-bottom списка (64/160px). Меняется content-box,
+      // ResizeObserver срабатывает и сюда приходит новое значение; в горячем пути (scroll) этого чтения нет.
+      const tail = Number.parseFloat(getComputedStyle(el).paddingBottom)
+      metrics.current.tail = Number.isFinite(tail) ? tail : LIST_TAIL
+    }
+    const rail = railRef.current
+    if (rail) metrics.current.rail = rail.clientHeight
+  }
+
+  const latest = useRef({ syncWindow, scheduleThumb, reveal, measure })
+  latest.current = { syncWindow, scheduleThumb, reveal, measure }
 
   useLayoutEffect(() => {
     const el = listRef.current
     if (!el) return
     const onScroll = () => {
-      latest.current.syncWindow()
-      latest.current.placeThumb()
+      scrollRef.current = el.scrollTop
+      // Окно строк — в том же кадре, что и scrollTop, иначе виден пустой промежуток.
+      latest.current.syncWindow(true)
+      latest.current.scheduleThumb()
       latest.current.reveal()
     }
     el.addEventListener('scroll', onScroll, { passive: true })
     const observer = new ResizeObserver(() => {
-      latest.current.syncWindow()
-      latest.current.placeThumb()
+      latest.current.measure()
+      latest.current.syncWindow(false)
+      latest.current.scheduleThumb()
     })
     observer.observe(el)
+    latest.current.measure()
     return () => {
       el.removeEventListener('scroll', onScroll)
       observer.disconnect()
@@ -388,9 +555,15 @@ export function TrackSidebar({ loading, collapsed = false }: { loading: boolean;
   }, [])
 
   useLayoutEffect(() => {
-    syncWindow()
-    placeThumb()
-  }, [tracks.length, overflow, sort, span.start, span.end])
+    measure()
+    syncWindow(false)
+    scheduleThumb()
+  }, [overflow])
+
+  useLayoutEffect(() => {
+    syncWindow(false)
+    scheduleThumb()
+  }, [tracks.length, sort, loading])
 
   useLayoutEffect(() => {
     if (scrollGen.current === motion.generation) return
@@ -399,36 +572,34 @@ export function TrackSidebar({ loading, collapsed = false }: { loading: boolean;
     if (!list || !motion.above) return
     // Rows removed above the viewport are not drawn; shift scroll so the visible files stay put.
     list.scrollTop = Math.max(0, list.scrollTop - motion.above * ROW)
-    latest.current.syncWindow()
-    latest.current.placeThumb()
+    latest.current.syncWindow(false)
+    latest.current.scheduleThumb()
   }, [motion.generation, motion.above])
 
+  // К выбранному файлу едем только когда сменился focus (клик, клавиатура, история).
+  // Пачки дописываются в конец и focus не трогают, поэтому прокрутка остаётся на месте.
   useLayoutEffect(() => {
     const list = listRef.current
-    if (!list || !visible.length) return
-    const path = focus && visible.some((track) => track.path === focus) ? focus : selected.at(-1)
-    // A click already shows the row; scrolling to selected.at(-1) would jump (ctrl-toggle, shift-range).
-    const fromClick = performance.now() - lastPick.current < 400
-    if (path && !fromClick) {
-      const index = visible.findIndex((track) => track.path === path)
-      if (index >= 0) {
-        const top = index * ROW
-        const bottom = top + ROW
-        if (top < list.scrollTop) list.scrollTop = top
-        else if (bottom > list.scrollTop + list.clientHeight) list.scrollTop = bottom - list.clientHeight
-      }
-    }
-    syncWindow()
-    placeThumb()
-  }, [focus, orderKey, selected])
+    if (!list || !focus) return
+    const index = orderRef.current.findIndex((track) => track.path === focus)
+    if (index < 0) return
+    const top = index * ROW
+    const bottom = top + ROW
+    const view = metrics.current.view || list.clientHeight
+    if (top < list.scrollTop) list.scrollTop = top
+    else if (bottom > list.scrollTop + view) list.scrollTop = bottom - view
+    else return
+    scrollRef.current = list.scrollTop
+  }, [focus])
 
   useLayoutEffect(() => {
-    knownTracks.current = new Map(visible.map((track) => [track.path, track]))
+    knownTracks.current = visible
   }, [visible])
 
   useEffect(() => {
     return () => {
       window.clearTimeout(hideTimer.current)
+      if (thumbRaf.current) cancelAnimationFrame(thumbRaf.current)
       const sheet = sheetRef.current
       if (!sheet) return
       document.adoptedStyleSheets = document.adoptedStyleSheets.filter((item) => item !== sheet)
@@ -464,8 +635,10 @@ export function TrackSidebar({ loading, collapsed = false }: { loading: boolean;
     const rail = railRef.current
     const thumb = thumbRef.current
     if (!state || !el || !rail || !thumb) return
-    const max = el.scrollHeight - el.clientHeight
-    const travel = Math.max(1, rail.clientHeight - thumb.getBoundingClientRect().height)
+    const view = metrics.current.view || el.clientHeight
+    const railH = metrics.current.rail || rail.clientHeight
+    const max = contentSpan(countRef.current, ROW, metrics.current.tail) - view
+    const travel = Math.max(1, railH - thumbDraw.current)
     el.scrollTop = state.top + ((event.clientY - state.y) / travel) * max
   }
 
@@ -475,10 +648,10 @@ export function TrackSidebar({ loading, collapsed = false }: { loading: boolean;
     reveal()
   }
 
-  const nextPaths = visible.map((track) => track.path)
   if (!motion.ready) {
     const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches
-    const entered = reduced ? new Set<string>() : new Set(nextPaths)
+    const many = nextPaths.length > BULK_ROWS
+    const entered = reduced || many ? NO_PATHS : new Set(nextPaths)
     setMotion({
       ready: true,
       generation: 1,
@@ -487,6 +660,18 @@ export function TrackSidebar({ loading, collapsed = false }: { loading: boolean;
       exits: [],
       above: 0,
       defer: entered.size > 0
+    })
+  } else if (motion.paths !== nextPaths && (loading || nextPaths.length - motion.paths.length > BULK_ROWS)) {
+    // Догрузка: не строим множества на все пути и не анимируем тысячи строк.
+    // generation не растим — иначе эффект прокрутки срабатывает на каждую пачку.
+    setMotion({
+      ready: true,
+      generation: motion.generation,
+      paths: nextPaths,
+      entered: NO_PATHS,
+      exits: [],
+      above: 0,
+      defer: false
     })
   } else if (!samePaths(motion.paths, nextPaths)) {
     if (sameFiles(motion.paths, nextPaths)) {
@@ -507,7 +692,7 @@ export function TrackSidebar({ loading, collapsed = false }: { loading: boolean;
         const { first, last } = viewportRows(listRef.current)
         motion.paths.forEach((path, index) => {
           if (nextSet.has(path)) return
-          const track = knownTracks.current.get(path)
+          const track = knownTracks.current[index]
           if (!track) return
           if (index < first) {
             above += 1
@@ -559,8 +744,8 @@ export function TrackSidebar({ loading, collapsed = false }: { loading: boolean;
   }
 
   useEffect(() => {
-    setListOrder(orderKey ? orderKey.split('\0') : [])
-  }, [orderKey, setListOrder])
+    setListOrder(nextPaths)
+  }, [nextPaths, setListOrder])
 
   return (
     <aside className="sidebar" aria-hidden={collapsed} inert={collapsed ? true : undefined}>
@@ -596,16 +781,6 @@ export function TrackSidebar({ loading, collapsed = false }: { loading: boolean;
           ))}
         </ToolMenu>
         <span className="toolbar-gap" />
-        <Hint label={pack.prevFileKey} align="end">
-          <button type="button" className="icon-btn" aria-label={pack.prevFile} disabled={!tracks.length} onClick={() => selectDelta(-1)}>
-            <ChevronUpIcon />
-          </button>
-        </Hint>
-        <Hint label={pack.nextFileKey} align="end">
-          <button type="button" className="icon-btn" aria-label={pack.nextFile} disabled={!tracks.length} onClick={() => selectDelta(1)}>
-            <ChevronDownIcon />
-          </button>
-        </Hint>
         <ToolMenu label={pack.more} align="end" disabled={!sourceDir && !tracks.length} icon={<MoreIcon />}>
           <DropdownMenuItem disabled={!selected.length} onSelect={() => void revealCurrent()}>
             <FolderOutIcon />
@@ -676,7 +851,7 @@ export function TrackSidebar({ loading, collapsed = false }: { loading: boolean;
       <ContextMenuTrigger asChild>
       <ul
         ref={listRef}
-        className={motion.defer && motion.entered.size ? 'track-list defer-in' : 'track-list'}
+        className={`track-list${motion.defer && motion.entered.size ? ' defer-in' : ''}${loading || motion.entered.size > BULK_ROWS ? ' bulk' : ''}`}
         role="listbox"
         aria-multiselectable="true"
         aria-label={pack.tracks}
@@ -693,77 +868,21 @@ export function TrackSidebar({ loading, collapsed = false }: { loading: boolean;
           setMenuPath(path)
         }}
       >
-        {rows.map(({ track, leaving }, i) => {
-          const active = picked.has(track.path)
-          const motionClass = leaving ? 'track-out' : motion.entered.has(track.path) ? 'track-in' : ''
-          const view = toView(track)
-          const title = shownTrackTitle(view, plan)
-          const artist = shownTrackArtist(view, plan)
-          const dirty = isDirty(track, plan)
-          const cover = track.draftCover
-          return (
-            <li
-              key={track.path}
-              className={motionClass ? `track-item ${motionClass}` : 'track-item'}
-              role="presentation"
-              data-selected={active ? 'true' : 'false'}
-              aria-hidden={leaving ? true : undefined}
-              inert={leaving ? true : undefined}
-            >
-              <div className="track-clip">
-              <button
-                type="button"
-                role="option"
-                aria-selected={active}
-                aria-setsize={visible.length}
-                aria-posinset={span.start + i + 1}
-                tabIndex={anchorShown ? (track.path === anchor ? 0 : -1) : i === 0 ? 0 : -1}
-                data-selected={active ? 'true' : 'false'}
-                draggable
-                data-path={track.path}
-                className={active ? 'track-row selected' : 'track-row'}
-                onClick={(event) => {
-                  lastPick.current = performance.now()
-                  if (event.shiftKey) select(track.path, 'range')
-                  else if (event.ctrlKey || event.metaKey) select(track.path, 'toggle')
-                  else select(track.path, 'single')
-                }}
-              >
-                {cover ? (
-                  <img className="thumb" alt="" src={coverSrc(cover.mime, cover.dataBase64)} />
-                ) : (
-                  <span className="thumb" aria-hidden="true">
-                    <CoverIcon size={16} />
-                  </span>
-                )}
-                <span className="track-copy">
-                  <span className="track-title">
-                    <span className={dirty ? 'head-dirty on' : 'head-dirty'}>
-                      <span>
-                        <span
-                          className="dirty"
-                          role={dirty ? 'img' : undefined}
-                          aria-label={dirty ? pack.dirty : undefined}
-                          aria-hidden={dirty ? undefined : true}
-                        />
-                      </span>
-                    </span>
-                    <FadeText>{title}</FadeText>
-                  </span>
-                  <span className={track.error ? 'track-sub error' : 'track-sub'}>
-                    <FadeText>{(track.error ? tr(track.error) : '') || artist || pack.noArtist}</FadeText>
-                  </span>
-                </span>
-                <span className={showFormat ? 'track-badge on' : 'track-badge'}>
-                  <span>
-                    <span className="badge">{formatBadge(track.format)}</span>
-                  </span>
-                </span>
-              </button>
-              </div>
-            </li>
-          )
-        })}
+        {rows.map(({ track, leaving }, i) => (
+          <TrackRow
+            key={track.path}
+            track={track}
+            plan={plan}
+            active={picked.has(track.path)}
+            leaving={leaving}
+            entering={motion.entered.has(track.path)}
+            tabIndex={anchorShown ? (track.path === anchor ? 0 : -1) : i === 0 ? 0 : -1}
+            pos={span.start + i + 1}
+            size={visible.length}
+            showFormat={showFormat}
+            onPick={pick}
+          />
+        ))}
       </ul>
       </ContextMenuTrigger>
       <TrackMenuContent path={menuPath} group={menuPath !== null && picked.has(menuPath) && selected.length > 1} broken={menuBroken} />

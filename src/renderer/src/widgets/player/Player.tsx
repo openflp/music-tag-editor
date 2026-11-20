@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { coverSrc, formatDuration } from '@/entities/track/lib'
-import { useEditor } from '@/features/editor/model/store'
+import { trackAt, useEditor } from '@/features/editor/model/store'
 import { CoverIcon, PauseIcon, PlayIcon, RepeatIcon, RepeatOneIcon, ShuffleIcon, SkipNextIcon, SkipPrevIcon, VolumeIcon, VolumeOffIcon } from '@/shared/ui/icons'
 import { useCoverActions } from '@/widgets/metadata-form/cover-actions'
 import { getPrefs, setPlayerVolume } from '@/features/settings/prefs'
@@ -168,13 +168,7 @@ export function Player({ hidden = false }: { hidden?: boolean }) {
   useEffect(() => {
     loadedPathRef.current = currentPath
   }, [currentPath])
-  const durationMs = useEditor((state) => {
-    if (!currentPath) return 0
-    for (const track of state.tracks) {
-      if (track.path === currentPath) return track.tech.durationMs || 0
-    }
-    return 0
-  })
+  const durationMs = useEditor((state) => (currentPath ? trackAt(state.tracks, currentPath)?.tech.durationMs || 0 : 0))
   const saving = useEditor((state) => state.saving)
   const select = useEditor((state) => state.select)
   const selectDelta = useEditor((state) => state.selectDelta)

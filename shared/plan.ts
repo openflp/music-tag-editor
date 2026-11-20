@@ -166,6 +166,10 @@ export function sameValue(a: string | number | null, b: string | number | null):
 export function coverSame(a: CoverArt | null, b: CoverArt | null): boolean {
   if (a === b) return true
   if (!a || !b) return false
+  // у обеих есть отпечаток — сравниваем его (равный key = те же байты), без base64
+  if (a.key && b.key) return a.key === b.key
+  // заглушка без отпечатка для сравнения не годится: считаем обложки разными
+  if (a.lazy || b.lazy) return false
   return a.mime === b.mime && a.dataBase64 === b.dataBase64
 }
 

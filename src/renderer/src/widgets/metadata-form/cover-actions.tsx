@@ -1,10 +1,12 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { coverSame, uniformField } from '@shared/plan'
 import type { CoverArt } from '@shared/types'
+import { candidatesFor, loadFullCover, plainCover } from '@/entities/track/cover-cache'
 import { useEditor } from '@/features/editor/model/store'
 
 function coverMark(cover: CoverArt | null): string {
   if (!cover) return ''
+  if (cover.key) return `${cover.lazy ? 'L' : 'F'}:${cover.key}`
   const data = cover.dataBase64
   return `${cover.mime}:${data.length}:${data.slice(0, 24)}:${data.slice(-24)}`
 }
@@ -46,7 +48,31 @@ export function useCoverActions() {
   const setCover = useEditor((state) => state.setCover)
   const setApplyCover = useEditor((state) => state.setApplyCover)
   const disabled = view.disabled
-  const cover = view.cover
+  const raw = view.cover
+
+  // lazy-обложка из файла: полные байты нужны только для показа и скачивания — подгружаем здесь
+  const [loaded, setLoaded] = useState<CoverArt | null>(null)
+  useEffect(() => {
+    if (!raw || !raw.lazy) {
+      setLoaded(null)
+      return
+    }
+    let live = true
+    const paths = candidatesFor(useEditor.getState().tracks, raw)
+    loadFullCover(raw, paths)
+      .then((value) => {
+        if (live) setLoaded(value)
+      })
+      .catch((error) => {
+        if (!live) return
+        setLoaded(null)
+        useEditor.getState().notify({ kind: 'err', text: error instanceof Error ? error.message : 'Не удалось прочитать обложку' })
+      })
+    return () => {
+      live = false
+    }
+  }, [raw])
+  const cover = raw && !raw.lazy ? raw : raw && loaded && loaded.key === raw.key ? loaded : null
 
   const replace = async () => {
     try {
@@ -59,7 +85,7 @@ export function useCoverActions() {
 
   const download = async (target: CoverArt) => {
     try {
-      const saved = await window.musicTagEditor?.saveCover(target)
+      const saved = await window.musicTagEditor?.saveCover(plainCover(target))
       if (saved) useEditor.getState().notify({ kind: 'ok', text: 'Обложка сохранена' })
     } catch (error) {
       useEditor.getState().notify({ kind: 'err', text: error instanceof Error ? error.message : 'Не удалось сохранить обложку' })

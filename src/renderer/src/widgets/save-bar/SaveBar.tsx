@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 import { Popover } from 'radix-ui'
 import { baseName, formatBadge, formatBitrate, formatDuration, formatRate } from '@/entities/track/lib'
-import { draftCount, dirtyCount, editorPlan, historyEntries, useEditor } from '@/features/editor/model/store'
+import { draftCount, dirtyCount, editorPlan, historyEntries, selectionTracks, useEditor } from '@/features/editor/model/store'
 import { shownTrackTitle, trackDirty } from '@shared/plan'
 import {
   DropdownMenu,
@@ -61,7 +61,7 @@ function ErrorScroll({ watch, children }: { watch: number; children: ReactNode }
     const thumbY = thumbYRef.current
     if (next.y && railY && thumbY) {
       const track = railY.clientHeight
-      const height = Math.max(28, Math.min(track, (el.clientHeight / el.scrollHeight) * track))
+      const height = Math.max(48, Math.min(track, (el.clientHeight / el.scrollHeight) * track))
       const y = (el.scrollTop / Math.max(1, maxY)) * Math.max(0, track - height)
       yRule = `.status-thumb{height:${height}px;transform:translateY(${y}px)}`
     }
@@ -69,7 +69,7 @@ function ErrorScroll({ watch, children }: { watch: number; children: ReactNode }
     const thumbX = thumbXRef.current
     if (next.x && railX && thumbX) {
       const track = railX.clientWidth
-      const width = Math.max(28, Math.min(track, (el.clientWidth / el.scrollWidth) * track))
+      const width = Math.max(48, Math.min(track, (el.clientWidth / el.scrollWidth) * track))
       const x = (el.scrollLeft / Math.max(1, maxX)) * Math.max(0, track - width)
       xRule = `.status-thumb-x{width:${width}px;transform:translateX(${x}px)}`
     }
@@ -320,8 +320,8 @@ function HistoryButton({
 
 export function TrackHeader() {
   const { locale, pack } = useI18n()
-  const tracks = useEditor((state) => state.tracks)
-  const selected = useEditor((state) => state.selected)
+  const trackCount = useEditor((state) => state.tracks.length)
+  const picked = useEditor(selectionTracks)
   const saving = useEditor((state) => state.saving)
   const reset = useEditor((state) => state.requestReset)
   const remove = useEditor((state) => state.remove)
@@ -340,7 +340,6 @@ export function TrackHeader() {
   const liveDirty = useEditor((state) => dirtyCount(state))
   const drafts = useEditor((state) => draftCount(state))
   const plan = useEditor(editorPlan)
-  const picked = tracks.filter((track) => selected.includes(track.path))
   const fileDirty = picked.some((track) =>
     trackDirty(
       {
@@ -366,8 +365,8 @@ export function TrackHeader() {
   }, plan) : pack.selectedN(picked.length)
   const meta = (() => {
     if (!first) return pack.pickTrack
-    if (picked.length !== 1) return pack.selectedOf(picked.length, tracks.length)
-    const bits = [pack.selectedOne(tracks.length), formatBadge(first.format)]
+    if (picked.length !== 1) return pack.selectedOf(picked.length, trackCount)
+    const bits = [pack.selectedOne(trackCount), formatBadge(first.format)]
     if (number) bits.push(`%n% ${number}`)
     const duration = formatDuration(first.tech.durationMs)
     if (duration) bits.push(duration)

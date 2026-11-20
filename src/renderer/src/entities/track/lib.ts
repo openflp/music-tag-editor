@@ -31,12 +31,20 @@ export function formatBitrate(value: number): string {
   return `${kbps} kbps`
 }
 
+// Intl.DateTimeFormat дорог в создании: вкладка «Информация» зовёт formatStamp дважды на каждый выбранный трек.
+const stampFormats = new Map<string, Intl.DateTimeFormat>()
+
 export function formatStamp(ms: number, locale: string): string {
   if (!ms) return ''
   const date = new Date(ms)
   if (Number.isNaN(date.getTime())) return ''
   const lang = locale === 'en' ? 'en' : 'ru'
-  return new Intl.DateTimeFormat(lang, { dateStyle: 'medium', timeStyle: 'short' }).format(date)
+  let format = stampFormats.get(lang)
+  if (!format) {
+    format = new Intl.DateTimeFormat(lang, { dateStyle: 'medium', timeStyle: 'short' })
+    stampFormats.set(lang, format)
+  }
+  return format.format(date)
 }
 
 export function formatBadge(extension: string): string {

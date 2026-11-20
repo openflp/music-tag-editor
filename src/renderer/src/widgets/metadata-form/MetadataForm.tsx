@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
 import { shortcutMatches, type ShortcutId } from '@/features/settings/prefs'
 import { coverSrc } from '@/entities/track/lib'
-import { useEditor, type TrackVm } from '@/features/editor/model/store'
+import { selectionTracks, useEditor, type TrackVm } from '@/features/editor/model/store'
 import { APPLY_FIELDS, HISTORY_FIELDS, type HistoryField, type TagField } from '@shared/types'
 import { NAME_TOKENS } from '@shared/filename'
 import { sameValue, uniformField } from '@shared/plan'
@@ -100,23 +100,10 @@ function TrackCover() {
   )
 }
 
-function counts(tracks: TrackVm[], field: HistoryField): { value: string; count: number }[] {
-  const map = new Map<string, number>()
-  for (const track of tracks) {
-    if (track.error) continue
-    const value = String(track.draft[field] ?? '').trim()
-    if (!value) continue
-    map.set(value, (map.get(value) ?? 0) + 1)
-  }
-  return [...map.entries()]
-    .sort((left, right) => left[0].localeCompare(right[0], getLocale()))
-    .map(([value, count]) => ({ value, count }))
-}
-
 export function MetadataForm() {
   const { pack } = useI18n()
   const tracks = useEditor((state) => state.tracks)
-  const selected = useEditor((state) => state.selected)
+  const picked = useEditor(selectionTracks)
   const applyAll = useEditor((state) => state.applyAll)
   const applyValues = useEditor((state) => state.applyValues)
   const history = useEditor((state) => state.history)
@@ -159,11 +146,8 @@ export function MetadataForm() {
     return () => window.removeEventListener('keydown', onKey, true)
   }, [])
 
-  const picked = useMemo(() => {
-    const ids = new Set(selected)
-    return tracks.filter((track) => ids.has(track.path))
-  }, [tracks, selected])
-  const editable = picked.filter((track) => !track.error)
+  // стабильная ссылка: InfoPane мемоизируется по ней
+  const editable = useMemo(() => picked.filter((track) => !track.error), [picked])
   const disabled = saving || editable.length === 0
 
   const textField = (field: TagField) => {
@@ -187,11 +171,42 @@ export function MetadataForm() {
     return { mixed: view.mixed, value: view.mixed ? null : view.value }
   }
 
+  // варианты для выпадающих списков: сортировка по всем трекам на каждый символ в поле не нужна.
+  // Пачка дописывается в конец, поэтому частоты копятся только по новым строкам.
+  const deferredTracks = useDeferredValue(tracks)
+  const optionCache = useRef<{ tracks: TrackVm[]; bags: Map<HistoryField, Map<string, number>> } | null>(null)
   const optionMap = useMemo(() => {
+    const prev = optionCache.current
+    const grown =
+      prev !== null &&
+      prev.tracks.length <= deferredTracks.length &&
+      prev.tracks.every((track, index) => track === deferredTracks[index])
+    const bags = new Map<HistoryField, Map<string, number>>()
+    for (const field of HISTORY_FIELDS) {
+      bags.set(field, grown ? new Map(prev.bags.get(field)) : new Map())
+    }
+    const from = grown ? prev.tracks.length : 0
+    for (let index = from; index < deferredTracks.length; index += 1) {
+      const track = deferredTracks[index]
+      if (track.error) continue
+      for (const field of HISTORY_FIELDS) {
+        const value = String(track.draft[field] ?? '').trim()
+        if (!value) continue
+        const bag = bags.get(field) as Map<string, number>
+        bag.set(value, (bag.get(value) ?? 0) + 1)
+      }
+    }
+    optionCache.current = { tracks: deferredTracks, bags }
     const map = {} as Record<HistoryField, { value: string; count: number }[]>
-    for (const field of HISTORY_FIELDS) map[field] = counts(tracks, field)
+    // один Collator на проход: localeCompare(…, locale) на каждое сравнение многократно дороже
+    const collator = new Intl.Collator(getLocale())
+    for (const field of HISTORY_FIELDS) {
+      map[field] = [...(bags.get(field) as Map<string, number>).entries()]
+        .sort((left, right) => collator.compare(left[0], right[0]))
+        .map(([value, count]) => ({ value, count }))
+    }
     return map
-  }, [tracks])
+  }, [deferredTracks])
 
   if (picked.length > 0 && !editable.length) {
     return (

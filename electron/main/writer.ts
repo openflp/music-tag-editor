@@ -1,7 +1,8 @@
 import { parentPort } from 'node:worker_threads'
 import type { WriteJob, WriteResult } from '@shared/types'
 import { orderWrites } from '@shared/filename'
-import { writeTrack } from '../services/tag-io'
+import { writeTrack, readTrack, readCoverOnly } from '../services/tag-io'
+import { readTracks } from '../services/library'
 
 interface UtilityPort {
   on(event: 'message', listener: (event: { data: unknown }) => void): void
@@ -37,16 +38,62 @@ async function run(jobs: WriteJob[]): Promise<void> {
   emit({ type: 'done', results })
 }
 
+// Чтение тегов — в этом же процессе, что и запись: синхронный taglib не блокирует main/окно.
+async function runRead(inputs: string[]): Promise<void> {
+  try {
+    await readTracks(inputs, (tracks) => emit({ type: 'batch', tracks }), { lite: true })
+    emit({ type: 'done' })
+  } catch (error) {
+    emit({ type: 'error', message: error instanceof Error ? error.message : 'Не удалось прочитать файлы' })
+  }
+}
+
+function runDetails(paths: string[]): void {
+  try {
+    const step = 24
+    for (let index = 0; index < paths.length; index += step) {
+      emit({ type: 'batch', tracks: paths.slice(index, index + step).map((filePath) => readTrack(filePath, false, 'none')) })
+    }
+    emit({ type: 'done' })
+  } catch (error) {
+    emit({ type: 'error', message: error instanceof Error ? error.message : 'Не удалось прочитать файлы' })
+  }
+}
+
+function runCovers(paths: string[]): void {
+  try {
+    const step = 6
+    for (let index = 0; index < paths.length; index += step) {
+      emit({ type: 'covers', items: paths.slice(index, index + step).map((path) => ({ path, cover: readCoverOnly(path) })) })
+    }
+    emit({ type: 'done' })
+  } catch (error) {
+    emit({ type: 'error', message: error instanceof Error ? error.message : 'Не удалось прочитать обложки' })
+  }
+}
+
 function unwrap(payload: unknown): unknown {
   if (payload && typeof payload === 'object' && 'data' in payload) {
     const inner = (payload as { data?: unknown }).data
-    if (inner && typeof inner === 'object' && 'jobs' in inner) return inner
+    if (inner && typeof inner === 'object' && ('jobs' in inner || 'kind' in inner)) return inner
   }
   return payload
 }
 
 function accept(payload: unknown): void {
-  const data = unwrap(payload) as { jobs?: WriteJob[] } | null
+  const data = unwrap(payload) as { jobs?: WriteJob[]; kind?: string; inputs?: unknown; paths?: unknown } | null
+  if (data?.kind === 'read' && Array.isArray(data.inputs)) {
+    void runRead(data.inputs.filter((item): item is string => typeof item === 'string'))
+    return
+  }
+  if (data?.kind === 'details' && Array.isArray(data.paths)) {
+    runDetails(data.paths.filter((item): item is string => typeof item === 'string'))
+    return
+  }
+  if (data?.kind === 'covers' && Array.isArray(data.paths)) {
+    runCovers(data.paths.filter((item): item is string => typeof item === 'string'))
+    return
+  }
   const jobs = data?.jobs
   if (!Array.isArray(jobs)) {
     emit({ type: 'done', results: [] })

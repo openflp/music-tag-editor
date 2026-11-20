@@ -20,7 +20,9 @@ const api = {
   openFiles: (): Promise<string[]> => ipcRenderer.invoke(IPC.openFiles),
   openFolder: (): Promise<string[]> => ipcRenderer.invoke(IPC.openFolder),
   pickFolder: (): Promise<string | null> => ipcRenderer.invoke(IPC.pickFolder),
-  readTags: (paths: string[]): Promise<TrackSnapshot[]> => ipcRenderer.invoke(IPC.readTags, paths),
+  readTags: (paths: string[], options?: { stream?: boolean }): Promise<TrackSnapshot[]> => ipcRenderer.invoke(IPC.readTags, paths, options),
+  readDetails: (paths: string[]): Promise<TrackSnapshot[]> => ipcRenderer.invoke(IPC.readDetails, paths),
+  readCovers: (paths: string[]): Promise<{ path: string; cover: CoverArt | null }[]> => ipcRenderer.invoke(IPC.readCovers, paths),
   onTrackBatch: (callback: (tracks: TrackSnapshot[]) => void): (() => void) => {
     const listener = (_event: unknown, payload: TrackSnapshot[]) => callback(payload)
     ipcRenderer.on(IPC.trackBatch, listener)

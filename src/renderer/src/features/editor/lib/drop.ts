@@ -79,12 +79,23 @@ function encodeBase64(bytes: Uint8Array): string {
   return btoa(binary)
 }
 
+// тот же отпечаток, что и в main (tag-io coverKey): размер + первые 20 hex-символов sha1
+async function coverKeyOf(bytes: Uint8Array): Promise<string | undefined> {
+  try {
+    const digest = await crypto.subtle.digest('SHA-1', bytes)
+    const hex = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('')
+    return `${bytes.byteLength}:${hex.slice(0, 20)}`
+  } catch {
+    return undefined
+  }
+}
+
 export async function coverFromFile(file: File): Promise<CoverArt> {
   if (file.size <= 0 || file.size > MAX_COVER_BYTES) throw new Error('Обложка больше 8 МБ или пустая')
   const mime = mimeOf(file)
   if (!mime) throw new Error('Обложка должна быть изображением')
   const bytes = new Uint8Array(await file.arrayBuffer())
-  return { mime, bytes: bytes.byteLength, dataBase64: encodeBase64(bytes) }
+  return { mime, bytes: bytes.byteLength, dataBase64: encodeBase64(bytes), key: await coverKeyOf(bytes) }
 }
 
 export async function commentFromFile(file: File): Promise<string> {

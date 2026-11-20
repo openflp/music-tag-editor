@@ -14,7 +14,7 @@ import {
 } from '@/components/ui/menubar'
 import { useEditor } from '@/features/editor/model/store'
 import { Hint } from '@/components/ui/tooltip'
-import { CheckIcon, FilePlusIcon, FolderIcon, GithubIcon, MenuIcon, MoreIcon, PlayerToggleIcon, SearchIcon, SettingsIcon, SidebarIcon, TrashIcon } from '@/shared/ui/icons'
+import { ArrowLeftIcon, ArrowRightIcon, CheckIcon, FilePlusIcon, FolderIcon, GithubIcon, MenuIcon, MoreIcon, PlayerToggleIcon, SearchIcon, SettingsIcon, SidebarIcon, TrashIcon } from '@/shared/ui/icons'
 import { TITLEBAR_CENTER_ID, TITLEBAR_LEFT_ID, TITLEBAR_RIGHT_ID, ensureTitlebarRegions } from '@shared/titlebar'
 import { packTitlebarMenuOverflow } from '@/widgets/chrome/menu-overflow'
 import { useAppSettings } from '@/features/settings/app-settings'
@@ -355,6 +355,27 @@ function PlayerToggle({ open, onToggle }: { open: boolean; onToggle: () => void 
   )
 }
 
+function FileHistoryNav() {
+  const { pack } = useI18n()
+  const past = useEditor((state) => state.filePast.length)
+  const future = useEditor((state) => state.fileFuture.length)
+  const goFileHistory = useEditor((state) => state.goFileHistory)
+  return (
+    <div className="title-file-nav">
+      <Hint label={pack.fileBack}>
+        <button type="button" className="icon-btn" aria-label={pack.fileBack} disabled={past === 0} onClick={() => goFileHistory(-1)}>
+          <ArrowLeftIcon />
+        </button>
+      </Hint>
+      <Hint label={pack.fileForward}>
+        <button type="button" className="icon-btn" aria-label={pack.fileForward} disabled={future === 0} onClick={() => goFileHistory(1)}>
+          <ArrowRightIcon />
+        </button>
+      </Hint>
+    </div>
+  )
+}
+
 function TitleSearch({ onPalette }: { onPalette: () => void }) {
   const { pack } = useI18n()
   return (
@@ -433,7 +454,10 @@ export function TitleBar({
         <MenuBar onPalette={onPalette} />
       </TitlebarHost>
       <TitlebarHost id="mte-titlebar-search-host" placement="center">
-        <TitleSearch onPalette={onPalette} />
+        <div className="title-search-anchor">
+          <FileHistoryNav />
+          <TitleSearch onPalette={onPalette} />
+        </div>
       </TitlebarHost>
       <TitlebarHost id="mte-titlebar-settings-host" placement="before-controls">
         <SidebarToggle open={sidebarOpen} onToggle={onToggleSidebar} />

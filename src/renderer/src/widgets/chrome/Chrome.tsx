@@ -1,17 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { defaultFilter } from 'cmdk'
+import { useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react'
+import { flushSync } from 'react-dom'
 import { editorPlan, useEditor, type TrackVm } from '@/features/editor/model/store'
-import { coverSrc } from '@/entities/track/lib'
-import {
-  Command,
-  CommandDialog,
-  CommandEmpty,
-  CommandGroup,
-  CommandInput,
-  CommandItem,
-  CommandList,
-  CommandShortcut
-} from '@/components/ui/command'
+import { CoverImg } from '@/entities/track/cover-thumb'
+import { Command, CommandDialog, CommandInput, CommandList } from '@/components/ui/command'
 import { ShortcutKeys } from '@/components/ui/kbd'
 import { Hint } from '@/components/ui/tooltip'
 import { FadeText } from '@/shared/ui/fade-text'
@@ -22,6 +13,8 @@ import { useShortcut } from '@/features/settings/prefs'
 import { fileWord, useI18n } from '@/shared/i18n'
 import type { DropMode } from '@/features/editor/lib/drop'
 import { readSidebarWidth } from './sidebar-layout'
+import { rankBy, scoreHay } from './palette-rank'
+import { virtualRange } from '@/shared/ui/scroll-metrics'
 
 export { TitleBar } from './titlebar'
 
@@ -46,24 +39,25 @@ function paintSidebar(width: number): number {
 // «доезжает» до -ширины — при запуске с закрытым sidebar было видно движение.
 paintSidebar(readSidebarWidth())
 
-const PAGE = 48
-const PALETTE_LIMIT = 80
 // сколько держим содержимое палитры живым после закрытия — чуть дольше анимации закрытия (.command-glass, 260–300мс)
 const PALETTE_EXIT_MS = 320
+const ROW = 44
+const HEAD = 32
+const OVERSCAN = 16
 const EMPTY_TRACKS: TrackVm[] = []
+// клавиши, после которых активную строку нужно довести до видимой области
+const NAV_KEYS = new Set(['ArrowDown', 'ArrowUp', 'Home', 'End', 'PageDown', 'PageUp'])
 
 const TAB_IDS = ['all', 'files', 'dirty', 'commands'] as const
 
 type PaletteTab = (typeof TAB_IDS)[number]
 
-function rankRows<T>(rows: T[], query: string, text: (row: T) => string): T[] {
-  const q = query.trim()
-  if (!q) return rows
-  return rows
-    .map((row, index) => ({ row, index, score: defaultFilter(text(row), q) }))
-    .filter((item) => item.score > 0)
-    .sort((a, b) => b.score - a.score || a.index - b.index)
-    .map((item) => item.row)
+type FileRow = {
+  track: TrackVm
+  title: string
+  artist: string
+  number: number | undefined
+  text: string
 }
 
 function toView(track: TrackVm) {
@@ -117,15 +111,29 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
   const openDialog = useEditor((state) => state.openDialog)
   const saveAll = useEditor((state) => state.requestSave)
   const clear = useEditor((state) => state.clear)
+  const loading = useEditor((state) => (active ? state.loading : false))
   const [tab, setTab] = useState<PaletteTab>('all')
   const [query, setQuery] = useState('')
-  const [shown, setShown] = useState(PAGE)
-  const listKey = `${tab}:${tracks.length}`
-  const [shownKey, setShownKey] = useState(listKey)
-  if (shownKey !== listKey) {
-    setShownKey(listKey)
-    setShown(PAGE)
-  }
+  const deferred = useDeferredValue(query)
+  const q = deferred.trim().toLowerCase()
+  const [cursor, setCursor] = useState(0)
+  const [span, setSpan] = useState({ start: 0, end: 24 })
+  const spanRef = useRef(span)
+  spanRef.current = span
+  const held = useRef<RefObject<HTMLDivElement | null> | null>(null)
+  // Содержимое диалога монтируется через Portal уже ПОСЛЕ layout-эффектов родителя, поэтому
+  // слушатель scroll нельзя вешать по held.current.current в эффекте [open]: там ещё null.
+  // Узел приходит через ref-колбэк, эффект подписки зависит от него.
+  const [listEl, setListEl] = useState<HTMLDivElement | null>(null)
+  const bindList = useCallback((node: HTMLDivElement | null) => {
+    const ref = held.current
+    if (ref) (ref as { current: HTMLDivElement | null }).current = node
+    setListEl(node)
+  }, [])
+  const revealRef = useRef(false)
+  const sheetRef = useRef<CSSStyleSheet | null>(null)
+  const cssRef = useRef('')
+  const geomRef = useRef({ filesTop: 0, fileCount: 0, view: 360 })
 
   const openKey = useShortcut('open')
   const saveKey = useShortcut('save')
@@ -138,48 +146,176 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
     [openDialog, saveAll, clear, pack.openFiles, pack.writeTags, pack.clearList, openKey, saveKey]
   )
 
-  const files = tracks.filter((track) => {
-    if (tab === 'commands') return false
-    if (tab === 'dirty') return plan ? isDirty(track, plan) : false
-    return true
+  // Строка поиска собирается вместе с пачкой, а не на каждый символ.
+  // Хвост дописывается отдельно: на 5000 файлах полный проход на каждую пачку заметно тормозит ввод.
+  const catalogCache = useRef<{ tracks: TrackVm[]; plan: ReturnType<typeof editorPlan> | null; rows: FileRow[] }>({
+    tracks: EMPTY_TRACKS,
+    plan: null,
+    rows: []
   })
-  const showCommands = tab === 'all' || tab === 'commands'
-  const q = query.trim()
-  const labels = useMemo(() => {
-    const map = new Map<string, ReturnType<typeof labelOf>>()
-    if (!active) return map
-    for (const track of tracks) map.set(track.path, labelOf(track, plan))
-    return map
+  const catalog = useMemo(() => {
+    if (!active) {
+      catalogCache.current = { tracks: EMPTY_TRACKS, plan: null, rows: [] }
+      return catalogCache.current.rows
+    }
+    const prev = catalogCache.current
+    const grown =
+      prev.plan === plan &&
+      prev.tracks.length <= tracks.length &&
+      prev.tracks.every((track, index) => track === tracks[index])
+    const rows = grown ? prev.rows.slice(0, prev.tracks.length) : []
+    const from = grown ? prev.tracks.length : 0
+    for (let index = from; index < tracks.length; index += 1) {
+      const track = tracks[index]
+      const label = labelOf(track, plan)
+      rows.push({
+        track,
+        title: label.title,
+        artist: label.artist,
+        number: label.number,
+        text: `${label.title} ${label.artist} ${track.draft.title} ${track.draft.artist} ${label.number ?? ''}`.toLowerCase()
+      })
+    }
+    catalogCache.current = { tracks, plan, rows }
+    return rows
   }, [active, tracks, plan])
-  const labelFor = (track: TrackVm) => labels.get(track.path) ?? labelOf(track, plan)
-  const rankedFiles = rankRows(files, q, (track) => {
-    const label = labelFor(track)
-    return `${label.title} ${label.artist} ${track.draft.title} ${track.draft.artist} ${label.number ?? ''}`
-  })
-  const rankedCommands = rankRows(commands, q, (command) => command.label)
-  const visibleFiles = (q ? rankedFiles : rankedFiles.slice(0, shown)).slice(0, PALETTE_LIMIT)
-  const busy = !q && shown < Math.min(files.length, PALETTE_LIMIT)
-  const fileLeadScore = rankedFiles[0] ? defaultFilter(`${labelFor(rankedFiles[0]).title} ${labelFor(rankedFiles[0]).artist}`, q) : 0
-  const commandLeadScore = rankedCommands[0] ? defaultFilter(rankedCommands[0].label, q) : 0
-  const filesLead = !q || fileLeadScore >= commandLeadScore
+  const pool = useMemo(() => {
+    if (tab === 'commands') return [] as FileRow[]
+    if (tab === 'dirty') return catalog.filter((row) => (plan ? isDirty(row.track, plan) : false))
+    return catalog
+  }, [catalog, tab, plan])
+  const rankedFiles = useMemo(() => rankBy(pool, q, (row) => row.text), [pool, q])
+  const rankedCommands = useMemo(() => rankBy(commands, q, (command) => command.label.toLowerCase()), [commands, q])
+  const showCommands = tab === 'all' || tab === 'commands'
+  const fileCount = rankedFiles.length
+  const cmdCount = showCommands ? rankedCommands.length : 0
+  const fileScore = rankedFiles[0] ? scoreHay(rankedFiles[0].text, q) : 0
+  const commandScore = rankedCommands[0] ? scoreHay(rankedCommands[0].label.toLowerCase(), q) : 0
+  const filesLead = !q || fileScore >= commandScore
+  const fileBlock = fileCount ? HEAD + fileCount * ROW : 0
+  const cmdBlock = cmdCount ? HEAD + cmdCount * ROW : 0
+  const total = fileBlock + cmdBlock
+  const filesTop = !filesLead && cmdBlock ? cmdBlock : 0
+  const cmdsTop = filesLead ? fileBlock : 0
+  const hits = fileCount + cmdCount
+  const activeIndex = hits ? Math.min(cursor, hits - 1) : -1
+  geomRef.current.filesTop = filesTop
+  geomRef.current.fileCount = fileCount
 
-  useEffect(() => {
-    if (!open || q || shown >= Math.min(files.length, PALETTE_LIMIT)) return
-    const id = window.setTimeout(() => setShown((count) => Math.min(PALETTE_LIMIT, files.length, count + PAGE)), 32)
-    return () => window.clearTimeout(id)
-  }, [open, shown, files.length, q])
+  const filterKey = `${tab}:${q}`
+  const [filterMark, setFilterMark] = useState(filterKey)
+  if (filterMark !== filterKey) {
+    setFilterMark(filterKey)
+    setCursor(0)
+  }
 
   // сброс — только когда окно уже полностью закрыто (после анимации)
   useEffect(() => {
     if (active) return
     setQuery('')
     setTab('all')
-    setShown(PAGE)
+    setCursor(0)
   }, [active])
 
-  useEffect(() => {
-    document.querySelector('.command-glass .cmd-results .cmd-scroll-body')?.scrollTo({ top: 0 })
+  const paint = (rowsY: number) => {
+    const css = [
+      `.command-glass .cmd-virtual{height:${total}px}`,
+      `.command-glass .cmd-vhead-files{transform:translateY(${filesTop}px)}`,
+      `.command-glass .cmd-vrows{transform:translateY(${rowsY}px)}`,
+      `.command-glass .cmd-vhead-cmds{transform:translateY(${cmdsTop}px)}`,
+      `.command-glass .cmd-vcmds{transform:translateY(${cmdsTop + HEAD}px)}`
+    ].join('')
+    if (css === cssRef.current) return
+    cssRef.current = css
+    if (!sheetRef.current) {
+      const sheet = new CSSStyleSheet()
+      document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet]
+      sheetRef.current = sheet
+    }
+    sheetRef.current.replaceSync(css)
+  }
+
+  const syncWindow = (flush: boolean) => {
+    const el = held.current?.current
+    if (!el) return
+    const view = el.clientHeight || geomRef.current.view
+    geomRef.current.view = view
+    const origin = geomRef.current.filesTop + (geomRef.current.fileCount ? HEAD : 0)
+    const next = virtualRange(el.scrollTop, view, geomRef.current.fileCount, ROW, OVERSCAN, origin)
+    paint(geomRef.current.filesTop + HEAD + next.start * ROW)
+    if (spanRef.current.start === next.start && spanRef.current.end === next.end) return
+    if (flush) flushSync(() => setSpan(next))
+    else setSpan(next)
+  }
+
+  const latest = useRef({ syncWindow })
+  latest.current = { syncWindow }
+
+  useLayoutEffect(() => {
+    latest.current.syncWindow(false)
+  }, [total, filesTop, cmdsTop, fileCount, open])
+
+  useLayoutEffect(() => {
+    const el = listEl
+    if (!el || !open) return
+    latest.current.syncWindow(false)
+    const onScroll = () => latest.current.syncWindow(true)
+    el.addEventListener('scroll', onScroll, { passive: true })
+    const observer = new ResizeObserver(() => latest.current.syncWindow(false))
+    observer.observe(el)
+    return () => {
+      el.removeEventListener('scroll', onScroll)
+      observer.disconnect()
+    }
+  }, [open, listEl])
+
+  useLayoutEffect(() => {
+    const el = held.current?.current
+    if (!el) return
+    el.scrollTop = 0
+    latest.current.syncWindow(false)
   }, [q, tab])
+
+  const fileCountRef = useRef(fileCount)
+  useLayoutEffect(() => {
+    const previous = fileCountRef.current
+    fileCountRef.current = fileCount
+    // Курсор на команде хранится абсолютным индексом. Рост списка файлов не должен переносить его на файл.
+    if (!filesLead || fileCount === previous) return
+    setCursor((current) => (current > 0 && current >= previous ? current + (fileCount - previous) : current))
+  }, [fileCount, filesLead])
+
+  useLayoutEffect(() => {
+    // К активной строке едем только после клавиатуры. Наведение мыши тоже меняет activeIndex,
+    // но список из-под курсора двигаться не должен.
+    if (!revealRef.current) return
+    revealRef.current = false
+    const el = held.current?.current
+    if (!el || activeIndex < 0) return
+    const filesFirst = filesLead || cmdCount === 0
+    const rowTop = filesFirst
+      ? activeIndex < fileCount
+        ? filesTop + HEAD + activeIndex * ROW
+        : cmdsTop + HEAD + (activeIndex - fileCount) * ROW
+      : activeIndex < cmdCount
+        ? cmdsTop + HEAD + activeIndex * ROW
+        : filesTop + HEAD + (activeIndex - cmdCount) * ROW
+    // первая строка едет вместе с заголовком секции
+    const top = activeIndex === 0 ? 0 : rowTop
+    const bottom = rowTop + ROW
+    const view = geomRef.current.view || el.clientHeight
+    if (top < el.scrollTop) el.scrollTop = top
+    else if (bottom > el.scrollTop + view) el.scrollTop = bottom - view
+  }, [activeIndex])
+
+  useEffect(() => {
+    return () => {
+      const sheet = sheetRef.current
+      if (!sheet) return
+      document.adoptedStyleSheets = document.adoptedStyleSheets.filter((item) => item !== sheet)
+      sheetRef.current = null
+    }
+  }, [])
 
   const stepTab = (dir: -1 | 1) => {
     setTab((current) => {
@@ -188,70 +324,74 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
     })
   }
 
-  const fileGroup = visibleFiles.length ? (
-    <CommandGroup
-      key="files"
-      heading={
-        <span className="cmd-heading-label">
-          {tab === 'dirty' ? pack.changed : pack.files}
-          {busy ? <span className="cmd-spinner" role="status" aria-label={pack.loadingList} /> : null}
-        </span>
+  const choose = (index: number) => {
+    if (index < 0) return
+    const filesFirst = filesLead || cmdCount === 0
+    if (filesFirst) {
+      if (index < fileCount) {
+        select(rankedFiles[index].track.path, 'single')
+        onClose()
+        return
       }
-    >
-      {visibleFiles.map((track) => {
-        const { title, artist, number } = labelFor(track)
-        const cover = track.draftCover
-        return (
-          <CommandItem
-            key={track.path}
-            value={`file:${track.path}`}
-            onSelect={() => {
-              select(track.path, 'single')
-              onClose()
-            }}
-          >
-            {cover ? (
-              <img className="cmd-glyph" alt="" src={coverSrc(cover.mime, cover.dataBase64)} />
-            ) : (
-              <span className="cmd-glyph" aria-hidden="true">
-                <CoverIcon size={15} />
-              </span>
-            )}
-            <FadeText className="cmd-label">
-              {title}
-              {number ? ` %n% ${number}` : ''}
-              {artist ? ` — ${artist}` : ''}
-            </FadeText>
-          </CommandItem>
-        )
-      })}
-    </CommandGroup>
-  ) : null
+      rankedCommands[index - fileCount]?.run()
+      onClose()
+      return
+    }
+    if (index < cmdCount) {
+      rankedCommands[index]?.run()
+      onClose()
+      return
+    }
+    const file = rankedFiles[index - cmdCount]
+    if (!file) return
+    select(file.track.path, 'single')
+    onClose()
+  }
 
-  const commandGroup = showCommands && rankedCommands.length ? (
-    <CommandGroup key="commands" heading={pack.commands}>
-      {rankedCommands.map((command) => (
-        <CommandItem
-          key={command.id}
-          value={`cmd:${command.id}`}
-          onSelect={() => {
-            command.run()
-            onClose()
-          }}
-        >
-          <span className="cmd-glyph" aria-hidden="true">
-            {command.icon}
-          </span>
-          <FadeText className="cmd-label">{command.label}</FadeText>
-          {command.shortcut ? (
-            <CommandShortcut>
-              <ShortcutKeys shortcut={command.shortcut} />
-            </CommandShortcut>
-          ) : null}
-        </CommandItem>
-      ))}
-    </CommandGroup>
-  ) : null
+  const onCommandKey = (event: React.KeyboardEvent) => {
+    if (!hits && event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+    if (NAV_KEYS.has(event.key)) revealRef.current = true
+    const page = Math.max(1, Math.floor((geomRef.current.view || 320) / ROW) - 1)
+    if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      setCursor(Math.min(hits - 1, (activeIndex < 0 ? -1 : activeIndex) + 1))
+      return
+    }
+    if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      setCursor(Math.max(0, (activeIndex < 0 ? 0 : activeIndex) - 1))
+      return
+    }
+    if (event.key === 'Home') {
+      event.preventDefault()
+      setCursor(0)
+      return
+    }
+    if (event.key === 'End') {
+      event.preventDefault()
+      setCursor(hits - 1)
+      return
+    }
+    if (event.key === 'PageDown') {
+      event.preventDefault()
+      setCursor(Math.min(hits - 1, (activeIndex < 0 ? 0 : activeIndex) + page))
+      return
+    }
+    if (event.key === 'PageUp') {
+      event.preventDefault()
+      setCursor(Math.max(0, (activeIndex < 0 ? 0 : activeIndex) - page))
+      return
+    }
+    if (event.key === 'Enter') {
+      event.preventDefault()
+      choose(activeIndex)
+    }
+  }
+
+  const fileCursor = (index: number) => (filesLead || cmdCount === 0 ? index : cmdCount + index)
+  const commandCursor = (index: number) => (filesLead || cmdCount === 0 ? fileCount + index : index)
+  const windowRows = rankedFiles.slice(span.start, span.end)
+  const fileHeading = tab === 'dirty' ? pack.changed : pack.files
 
   return (
     <CommandDialog
@@ -263,7 +403,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
       description={pack.searchLong}
       className="command-glass"
     >
-      <Command shouldFilter={false}>
+      <Command shouldFilter={false} onKeyDown={onCommandKey}>
         <CommandInput
           value={query}
           onValueChange={setQuery}
@@ -312,27 +452,102 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
             </button>
           </span>
         </div>
-        <AxisScroll className="cmd-results" shade watch={`${tab}:${visibleFiles.length}:${showCommands}:${busy}`}>
-          {(ref) => (
-            <CommandList ref={ref} className="cmd-scroll-body">
-              {filesLead ? (
-                <>
-                  {fileGroup}
-                  {commandGroup}
-                </>
+        <AxisScroll className="cmd-results" shade watch={tab} extent={total} smooth={loading}>
+          {(ref) => {
+            held.current = ref
+            return (
+            <CommandList ref={bindList} className="cmd-scroll-body">
+              {total === 0 ? (
+                <div data-slot="command-empty">
+                  <span className="cmd-empty-title">{loading ? pack.loadingList : pack.noResults}</span>
+                  <span className="cmd-empty-hint">{pack.noResultsHint}</span>
+                </div>
               ) : (
-                <>
-                  {commandGroup}
-                  {fileGroup}
-                </>
+                <div className="cmd-virtual" role="listbox" aria-label={pack.files}>
+                  {fileCount ? (
+                    <div className="cmd-vhead cmd-vhead-files">
+                      <span className="cmd-heading-label">
+                        {fileHeading}
+                        {loading ? <span className="cmd-spinner" role="status" aria-label={pack.loadingList} /> : null}
+                      </span>
+                    </div>
+                  ) : null}
+                  <div className="cmd-vrows">
+                    {windowRows.map((row, offset) => {
+                      const index = span.start + offset
+                      const cover = row.track.draftCover
+                      const on = fileCursor(index) === activeIndex
+                      return (
+                        <button
+                          key={row.track.path}
+                          type="button"
+                          className="cmd-row"
+                          role="option"
+                          aria-selected={on}
+                          data-selected={on ? 'true' : 'false'}
+                          onMouseDown={(event) => event.preventDefault()}
+                          onMouseEnter={() => {
+                            revealRef.current = false
+                            setCursor(fileCursor(index))
+                          }}
+                          onClick={() => choose(fileCursor(index))}
+                        >
+                          {cover ? (
+                            <CoverImg cover={cover} className="cmd-glyph" iconSize={15} />
+                          ) : (
+                            <span className="cmd-glyph" aria-hidden="true">
+                              <CoverIcon size={15} />
+                            </span>
+                          )}
+                          <FadeText className="cmd-label">
+                            {row.title}
+                            {row.number ? ` %n% ${row.number}` : ''}
+                            {row.artist ? ` — ${row.artist}` : ''}
+                          </FadeText>
+                        </button>
+                      )
+                    })}
+                  </div>
+                  {cmdCount ? <div className="cmd-vhead cmd-vhead-cmds">{pack.commands}</div> : null}
+                  {cmdCount ? (
+                    <div className="cmd-vcmds">
+                      {rankedCommands.map((command, index) => {
+                        const on = commandCursor(index) === activeIndex
+                        return (
+                          <button
+                            key={command.id}
+                            type="button"
+                            className="cmd-row"
+                            role="option"
+                            aria-selected={on}
+                            data-selected={on ? 'true' : 'false'}
+                            onMouseDown={(event) => event.preventDefault()}
+                            onMouseEnter={() => {
+                              revealRef.current = false
+                              setCursor(commandCursor(index))
+                            }}
+                            onClick={() => choose(commandCursor(index))}
+                          >
+                            <span className="cmd-glyph" aria-hidden="true">
+                              {command.icon}
+                            </span>
+                            <FadeText className="cmd-label">{command.label}</FadeText>
+                            {command.shortcut ? (
+                              <span className="cmd-keys">
+                                <ShortcutKeys shortcut={command.shortcut} />
+                              </span>
+                            ) : null}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  ) : null}
+                </div>
               )}
             </CommandList>
-          )}
+            )
+          }}
         </AxisScroll>
-        <CommandEmpty>
-          <span className="cmd-empty-title">{pack.noResults}</span>
-          <span className="cmd-empty-hint">{pack.noResultsHint}</span>
-        </CommandEmpty>
       </Command>
     </CommandDialog>
   )

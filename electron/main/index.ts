@@ -5,17 +5,17 @@ import { copyFile, readFile, stat, writeFile } from 'node:fs/promises'
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, nativeTheme, screen, session, shell, utilityProcess, type UtilityProcess } from 'electron'
 import { packFor, type LocaleId } from '@shared/i18n'
 import { parseLanguagePack } from '@shared/language-pack'
-import { IPC, type AppSettings, type HistoryMap, type MenuCommand, type WriteJob, type WriteResult } from '@shared/types'
+import { IPC, type AppSettings, type HistoryMap, type MenuCommand, type TrackSnapshot, type WriteJob, type WriteResult } from '@shared/types'
 import { TITLEBAR_BACKGROUND, TITLEBAR_FOREGROUND, TITLEBAR_OVERLAY_HEIGHT, WINDOW_MIN_HEIGHT, WINDOW_MIN_WIDTH } from '@shared/titlebar'
 import { installMediaProtocol, registerMediaScheme } from './media'
 import { attachTitlebar } from './titlebar'
 import { copyFileList, copyPlainText } from '../services/clipboard'
 import { readTracks } from '../services/library'
 import { readAppSettings, readBounds, readHistory, pushHistory, writeAppSettings, writeBounds } from '../services/settings'
-import { writeTrack } from '../services/tag-io'
+import { coverKey, readCoverOnly, readTrack, writeTrack } from '../services/tag-io'
 import { orderWrites } from '@shared/filename'
 import { assertAccelerator, assertAppSettings, assertAudioFilePath, assertCloseConfirm, assertCoverInput, assertDirectoryPath, assertDragFiles, assertPathList, assertRepositoryUrl, assertTextExport, assertWriteJob, assertWriteJobs, extensionForMime, isImagePath, issueReportUrl, mimeFromImagePath } from '../services/validate'
-import { MAX_COVER_BYTES } from '@shared/types'
+import { MAX_COVER_BYTES, type CoverArt } from '@shared/types'
 
 const here = dirname(fileURLToPath(import.meta.url))
 
@@ -283,6 +283,61 @@ async function writeAll(jobs: WriteJob[]): Promise<WriteResult[]> {
   }
 }
 
+type ReaderRequest = { kind: 'read'; inputs: string[] } | { kind: 'details'; paths: string[] } | { kind: 'covers'; paths: string[] }
+type CoverItem = { path: string; cover: CoverArt | null }
+
+// Читаем теги в отдельном процессе (как запись): taglib синхронный и на тысячах файлов
+// иначе вешает main — а с ним окно и перетаскивание.
+function readWithUtility(request: ReaderRequest, onBatch: (tracks: TrackSnapshot[]) => void, onCovers?: (items: CoverItem[]) => void): Promise<void> {
+  const workerPath = join(here, 'writer.js')
+  return new Promise((resolve, reject) => {
+    let child: UtilityProcess
+    try {
+      child = utilityProcess.fork(workerPath, [], { serviceName: 'tag-reader', stdio: 'pipe' })
+    } catch (error) {
+      reject(error)
+      return
+    }
+    let settled = false
+    const finish = (error?: Error) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      child.kill()
+      if (error) reject(error)
+      else resolve()
+    }
+    const timer = setTimeout(() => finish(new Error('Чтение заняло слишком много времени')), 10 * 60 * 1000)
+    child.on('message', (message: { type?: string; tracks?: TrackSnapshot[]; items?: CoverItem[]; message?: string }) => {
+      if (message?.type === 'batch' && Array.isArray(message.tracks)) onBatch(message.tracks)
+      else if (message?.type === 'covers' && Array.isArray(message.items)) onCovers?.(message.items)
+      else if (message?.type === 'done') finish()
+      else if (message?.type === 'error') finish(new Error(message.message || 'Не удалось прочитать файлы'))
+    })
+    child.once('exit', () => finish(new Error('Процесс чтения остановился')))
+    child.postMessage(request)
+  })
+}
+
+async function readAll(inputs: string[], onBatch: (tracks: TrackSnapshot[]) => void): Promise<void> {
+  let started = false
+  try {
+    await readWithUtility({ kind: 'read', inputs }, (tracks) => {
+      started = true
+      onBatch(tracks)
+    })
+  } catch (error) {
+    // уже что-то отдали — повторять нельзя, иначе пойдут дубли
+    if (started) throw error
+    console.error('Utility reader unavailable, reading in main', error)
+    await readTracks(inputs, onBatch, { lite: true })
+  }
+}
+
+// до стольких файлов быстрее и проще прочитать прямо в main, чем поднимать процесс
+const DETAILS_INLINE = 6
+const COVERS_INLINE = 3
+
 async function existingDirectory(payload: unknown): Promise<string> {
   const dir = assertDirectoryPath(payload)
   try {
@@ -334,11 +389,58 @@ function registerIpc(): void {
     return result.filePaths[0] ?? null
   })
 
-  ipcMain.handle(IPC.readTags, async (event, payload: unknown) =>
-    readTracks(assertPathList(payload), (tracks) => {
+  ipcMain.handle(IPC.readTags, async (event, payload: unknown, options: unknown) => {
+    const inputs = assertPathList(payload)
+    const stream = Boolean(options && typeof options === 'object' && (options as { stream?: unknown }).stream === true)
+    const collected: TrackSnapshot[] = []
+    await readAll(inputs, (tracks) => {
+      if (!stream) {
+        for (const track of tracks) collected.push(track)
+        return
+      }
+      // потоковый режим: пачки только через IPC.trackBatch, повторно весь массив не отправляем
       if (!event.sender.isDestroyed()) event.sender.send(IPC.trackBatch, tracks)
     })
-  )
+    return collected
+  })
+
+  // полные обложки по требованию: для миниатюр видимых строк и для показа выбранного трека
+  ipcMain.handle(IPC.readCovers, async (_event, payload: unknown): Promise<CoverItem[]> => {
+    const paths = assertPathList(payload)
+    if (paths.length <= COVERS_INLINE) return paths.map((path) => ({ path, cover: readCoverOnly(path) }))
+    const collected: CoverItem[] = []
+    try {
+      await readWithUtility(
+        { kind: 'covers', paths },
+        () => undefined,
+        (items) => {
+          for (const item of items) collected.push(item)
+        }
+      )
+    } catch (error) {
+      if (collected.length) throw error
+      console.error('Utility reader unavailable, reading covers in main', error)
+      return paths.map((path) => ({ path, cover: readCoverOnly(path) }))
+    }
+    return collected
+  })
+
+  // полные сведения (facts, encoder, tagTypes…) — только для выбранных треков, по запросу
+  ipcMain.handle(IPC.readDetails, async (_event, payload: unknown) => {
+    const paths = assertPathList(payload)
+    if (paths.length <= DETAILS_INLINE) return paths.map((filePath) => readTrack(filePath, false, 'none'))
+    const collected: TrackSnapshot[] = []
+    try {
+      await readWithUtility({ kind: 'details', paths }, (tracks) => {
+        for (const track of tracks) collected.push(track)
+      })
+    } catch (error) {
+      if (collected.length) throw error
+      console.error('Utility reader unavailable, reading details in main', error)
+      return paths.map((filePath) => readTrack(filePath, false, 'none'))
+    }
+    return collected
+  })
 
   ipcMain.handle(IPC.writeTags, async (_event, payload: unknown) => writeAll(assertWriteJobs(payload)))
 
@@ -353,7 +455,7 @@ function registerIpc(): void {
     if (!isImagePath(filePath)) throw new Error('Нужен файл изображения')
     const data = await readFile(filePath)
     if (data.byteLength > MAX_COVER_BYTES) throw new Error('Обложка больше 8 МБ')
-    return { mime: mimeFromImagePath(filePath), bytes: data.byteLength, dataBase64: data.toString('base64') }
+    return { mime: mimeFromImagePath(filePath), bytes: data.byteLength, dataBase64: data.toString('base64'), key: coverKey(data) }
   })
 
   ipcMain.handle(IPC.saveCover, async (_event, payload: unknown) => {

@@ -7,7 +7,10 @@ export interface MusicApi {
   openFiles: () => Promise<string[]>
   openFolder: () => Promise<string[]>
   pickFolder: () => Promise<string | null>
-  readTags: (paths: string[]) => Promise<TrackSnapshot[]>
+  // stream: true — треки приходят только пачками через onTrackBatch, итоговый массив пустой
+  readTags: (paths: string[], options?: { stream?: boolean }) => Promise<TrackSnapshot[]>
+  readDetails: (paths: string[]) => Promise<TrackSnapshot[]>
+  readCovers: (paths: string[]) => Promise<{ path: string; cover: CoverArt | null }[]>
   onTrackBatch: (callback: (tracks: TrackSnapshot[]) => void) => () => void
   writeTags: (jobs: WriteJob[]) => Promise<WriteResult[]>
   getPathForFile: (file: File) => string

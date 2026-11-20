@@ -49,6 +49,13 @@ export interface CoverArt {
   mime: string
   bytes: number
   dataBase64: string
+  // key — отпечаток содержимого (размер:sha1). Равные key = одинаковые байты.
+  key?: string
+  // lazy — «заглушка» обложки из файла: dataBase64 пуст, байты читаются по требованию (readCovers).
+  // Заглушку НЕЛЬЗЯ записывать в файл: перед записью она заменяется полной обложкой.
+  lazy?: boolean
+  // файл, из которого её можно прочитать (подсказка; запасной вариант — пути треков с тем же key)
+  src?: string
 }
 
 export interface TrackFact {
@@ -124,6 +131,8 @@ export interface TrackSnapshot {
   path: string
   format: string
   error?: string
+  // false — «лёгкое» чтение для списка: без tech.facts, encoder, tagTypes (догружаются readDetails)
+  detailed?: boolean
   tags: TrackTags
   cover: CoverArt | null
   tech: TrackTech
@@ -199,6 +208,8 @@ export const IPC = {
   openFolder: 'files:open-folder',
   pickFolder: 'files:pick-folder',
   readTags: 'tags:read',
+  readDetails: 'tags:details',
+  readCovers: 'tags:covers',
   trackBatch: 'tags:batch',
   writeTags: 'tags:write',
   progress: 'tags:progress',

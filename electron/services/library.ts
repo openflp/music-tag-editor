@@ -5,7 +5,15 @@ import { readTrack } from './tag-io'
 import { isAudioPath } from './validate'
 
 const MAX_DEPTH = 6
-const READ_BATCH = 8
+const READ_BATCH = 48
+// первые файлы отдаём сразу по одному, чтобы список оживал мгновенно
+const FIRST_SINGLE = 4
+// и не держим готовые треки дольше этого, даже если пачка не набралась
+const FLUSH_MS = 100
+
+export interface ReadOptions {
+  lite?: boolean
+}
 
 function breathe(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve))
@@ -31,7 +39,13 @@ async function walk(dir: string, depth: number, push: (filePath: string) => Prom
   }
 }
 
-export async function readTracks(inputs: string[], onBatch?: (tracks: TrackSnapshot[]) => void): Promise<TrackSnapshot[]> {
+export async function readTracks(
+  inputs: string[],
+  onBatch?: (tracks: TrackSnapshot[]) => void,
+  options: ReadOptions = {}
+): Promise<TrackSnapshot[]> {
+  const lite = options.lite === true
+  let lastFlush = Date.now()
   const snapshots: TrackSnapshot[] = []
   const seen = new Set<string>()
   let pending: TrackSnapshot[] = []
@@ -40,6 +54,7 @@ export async function readTracks(inputs: string[], onBatch?: (tracks: TrackSnaps
     if (!pending.length) return
     const batch = pending
     pending = []
+    lastFlush = Date.now()
     onBatch?.(batch)
     await breathe()
   }
@@ -48,10 +63,10 @@ export async function readTracks(inputs: string[], onBatch?: (tracks: TrackSnaps
     const key = process.platform === 'linux' ? filePath : filePath.toLowerCase()
     if (seen.has(key) || snapshots.length >= MAX_FILES) return
     seen.add(key)
-    const snapshot = readTrack(filePath)
+    const snapshot = readTrack(filePath, lite)
     snapshots.push(snapshot)
     pending.push(snapshot)
-    if (snapshots.length <= READ_BATCH || pending.length >= READ_BATCH) await flush()
+    if (snapshots.length <= FIRST_SINGLE || pending.length >= READ_BATCH || Date.now() - lastFlush >= FLUSH_MS) await flush()
   }
 
   for (const input of inputs) {

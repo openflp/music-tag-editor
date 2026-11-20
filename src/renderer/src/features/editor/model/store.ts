@@ -1,6 +1,8 @@
 import type { CoverArt, HistoryMap, TagField, TrackSnapshot, TrackTags, TrackTech, WriteJob } from '@shared/types'
+import { noteFileVisit, stepFileNav } from '@shared/file-nav'
 import { collectHistory } from '@shared/history'
 import { APPLY_FIELDS, emptyHistory, emptyTags } from '@shared/types'
+import { candidatesFor, loadFullCover, plainCover } from '@/entities/track/cover-cache'
 import { buildJobs, coverSame, numberingActive, preparePlan, previewJobs, sameValue, trackDirty, uniformField, type PlanState, type PlanTrack, type WriteChange } from '@shared/plan'
 import { hasNumberToken, orderWrites } from '@shared/filename'
 import { getPrefs, planTokens, subscribePrefs } from '@/features/settings/prefs'
@@ -17,6 +19,8 @@ export interface TrackVm {
   originalCover: CoverArt | null
   draftCover: CoverArt | null
   tech: TrackTech
+  // false — tech.facts/encoder/tagTypes ещё не прочитаны (список читается «легко»)
+  detailed?: boolean
 }
 
 interface UndoSnap {
@@ -44,6 +48,8 @@ interface EditorState {
   selected: string[]
   anchor: string | null
   focus: string | null
+  filePast: string[]
+  fileFuture: string[]
   listOrder: string[]
   nowPlaying: string | null
   playCommand: { id: number; type: 'play' | 'pause'; path: string } | null
@@ -72,6 +78,7 @@ interface EditorState {
   openDialog: () => Promise<void>
   openFolder: () => Promise<void>
   refresh: () => Promise<void>
+  loadDetails: (paths: string[]) => Promise<void>
   refreshSource: () => Promise<void>
   revealSource: () => Promise<void>
   openSource: () => Promise<void>
@@ -86,6 +93,7 @@ interface EditorState {
   selectAll: () => void
   selectEdge: (edge: 'start' | 'end', extend?: boolean) => void
   selectDelta: (direction: 1 | -1, extend?: boolean) => void
+  goFileHistory: (direction: 1 | -1) => void
   setListOrder: (paths: string[]) => void
   setTrackOrder: (paths: string[]) => void
   setField: (field: TagField, value: TrackTags[TagField]) => void
@@ -187,7 +195,8 @@ function toVm(snapshot: TrackSnapshot): TrackVm {
     draft: { ...tags },
     originalCover: snapshot.cover,
     draftCover: snapshot.cover,
-    tech: snapshot.tech
+    tech: snapshot.tech,
+    detailed: snapshot.detailed
   }
 }
 
@@ -288,10 +297,27 @@ function currentTrackPath(state: EditorState): string | null {
   return state.selected[0] ?? null
 }
 
+function samePaths(left: readonly string[], right: readonly string[]): boolean {
+  if (left.length !== right.length) return false
+  for (let i = 0; i < left.length; i++) if (left[i] !== right[i]) return false
+  return true
+}
+
 function viewOrder(state: EditorState): string[] {
   const known = new Set(state.tracks.map((track) => track.path))
   const listed = state.listOrder.filter((path) => known.has(path))
   return listed.length === state.tracks.length && state.tracks.length ? listed : state.tracks.map((track) => track.path)
+}
+
+// Порядок сайдбара совпадает с порядком открытия — новые пути можно дописать, не сортируя всё заново.
+function extendOrder(state: EditorState, added: readonly string[]): string[] | null {
+  const order = state.listOrder
+  if (order.length !== state.tracks.length) return null
+  for (let index = 0; index < order.length; index += 1) {
+    if (order[index] !== state.tracks[index]?.path) return null
+  }
+  if (!added.length) return order
+  return order.length ? [...order, ...added] : [...added]
 }
 
 function span(order: string[], anchor: string, end: string): string[] | null {
@@ -310,7 +336,7 @@ function selectedTracks(state: EditorState): TrackVm[] {
 function sameCover(left: CoverArt | null | undefined, right: CoverArt | null | undefined): boolean {
   if (left === right) return true
   if (!left || !right) return !left && !right
-  return left.mime === right.mime && left.dataBase64 === right.dataBase64
+  return coverSame(left, right)
 }
 
 const STEP_FIELDS = ['title', 'artist', 'album', 'albumArtist', 'genre', 'year', 'trackNumber', 'trackTotal', 'discNumber', 'discTotal', 'comment', 'lyrics'] as const
@@ -394,10 +420,37 @@ function describeStep(before: UndoSnap, after: UndoSnap): string {
   return [...names].slice(0, 3).join(', ')
 }
 
-let historyCache: { state: EditorState; locale: string; entries: { undo: string[]; redo: string[] } } | null = null
+// takeSnap копирует draft КАЖДОГО трека. Раньше кэш держался на identity всего state, а он новый
+// после любого set (клик по строке, пачка загрузки) — снимок пересобирался каждый раз.
+const HISTORY_KEYS = [
+  'undo',
+  'redo',
+  'tracks',
+  'applyAll',
+  'applyValues',
+  'applyCover',
+  'sharedCover',
+  'fileMask',
+  'fileDir',
+  'fileAll',
+  'fileNumbers',
+  'fileNumberSeed'
+] as const
+
+type HistoryInputs = Pick<EditorState, (typeof HISTORY_KEYS)[number]>
+
+let historyCache: { inputs: HistoryInputs; locale: string; entries: { undo: string[]; redo: string[] } } | null = null
+
+function sameHistoryInputs(a: HistoryInputs, b: HistoryInputs): boolean {
+  return HISTORY_KEYS.every((key) => a[key] === b[key])
+}
+
+const EMPTY_HISTORY = { undo: [] as string[], redo: [] as string[] }
 
 export function historyEntries(state: EditorState, locale = getLocale()): { undo: string[]; redo: string[] } {
-  if (historyCache?.state === state && historyCache.locale === locale) return historyCache.entries
+  // Пока стеки пустые, снимок всех черновиков не нужен: на пачке загрузки это была копия каждого тега.
+  if (!state.undo.length && !state.redo.length) return EMPTY_HISTORY
+  if (historyCache && historyCache.locale === locale && sameHistoryInputs(historyCache.inputs, state)) return historyCache.entries
   const current = takeSnap(state)
   const undo = state.undo.map((snap, index) => describeStep(snap, state.undo[index + 1] ?? current)).reverse()
   const redo: string[] = []
@@ -408,7 +461,7 @@ export function historyEntries(state: EditorState, locale = getLocale()): { undo
     previous = snap
   }
   const entries = { undo, redo }
-  historyCache = { state, locale, entries }
+  historyCache = { inputs: Object.fromEntries(HISTORY_KEYS.map((key) => [key, state[key]])) as HistoryInputs, locale, entries }
   return entries
 }
 
@@ -435,6 +488,13 @@ function takeSnap(state: EditorState): UndoSnap {
 }
 
 const TOAST_MS = 3200
+// Пачки треков от main идут часто; каждая в сторе — копия массива плюс перерисовка списка.
+// Первую пачку показываем сразу, дальше копим и сбрасываем реже, чтобы список не дрожал.
+const LOAD_FLUSH_MS = 320
+const LOAD_FLUSH_ROWS = 240
+// сведения «Информации» подгружаем кусками, чтобы не слать тысячи фактов одним сообщением
+const DETAILS_CHUNK = 100
+const detailsPending = new Set<string>()
 let toastTimer: ReturnType<typeof setTimeout> | undefined
 let toastLeft = TOAST_MS
 let toastAt = 0
@@ -485,6 +545,8 @@ export const useEditor = create<EditorState>((set, get) => ({
   selected: [],
   anchor: null,
   focus: null,
+  filePast: [],
+  fileFuture: [],
   listOrder: [],
   nowPlaying: null,
   playCommand: null,
@@ -514,31 +576,80 @@ export const useEditor = create<EditorState>((set, get) => ({
     const known = new Set(get().tracks.map((track) => pathKey(track.path)))
     const fresh = paths.map((item) => item.trim()).filter((item) => item && !known.has(pathKey(item)))
     if (!fresh.length || !window.musicTagEditor) return
-    const accept = (incoming: TrackSnapshot[]) => {
+    const have = new Set(known)
+    let tracked = get().tracks.length
+    const commit = (incoming: TrackSnapshot[]) => {
       if (!incoming.length) return
       set((state) => {
-        const have = new Set(state.tracks.map((track) => pathKey(track.path)))
-        const added = incoming.filter((item) => item.path && !have.has(pathKey(item.path)))
+        if (state.tracks.length !== tracked) {
+          have.clear()
+          for (const track of state.tracks) have.add(pathKey(track.path))
+          tracked = state.tracks.length
+        }
+        const added: TrackSnapshot[] = []
+        for (const item of incoming) {
+          if (!item.path) continue
+          const key = pathKey(item.path)
+          if (have.has(key)) continue
+          have.add(key)
+          added.push(item)
+        }
         if (!added.length) return state
         const tracks = [...state.tracks, ...added.map(toVm)]
-        const first = tracks.find((track) => !track.error)?.path ?? tracks[0]?.path ?? null
-        return {
-          tracks,
-          selected: state.selected.length ? state.selected : first ? [first] : [],
-          anchor: state.anchor ?? first,
-          sourceDir: state.sourceDir ?? sharedDir(added.map((item) => item.path))
+        tracked = tracks.length
+        const sourceDir = state.sourceDir ?? sharedDir(added.map((item) => item.path))
+        const listOrder = extendOrder(state, added.map((item) => item.path))
+        const base = { tracks, sourceDir, ...(listOrder ? { listOrder } : {}) }
+        // Выбор, якорь и focus не трогаем повторно: сайдбар иначе прокручивается к первому файлу на каждой пачке.
+        if (pinned || state.selected.length) {
+          pinned = true
+          return base
         }
+        const first = tracks.find((track) => !track.error)?.path ?? tracks[0]?.path ?? null
+        if (!first) return base
+        pinned = true
+        return { ...base, selected: [first], anchor: state.anchor ?? first }
       })
+    }
+    let buffer: TrackSnapshot[] = []
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let primed = false
+    // Автовыбор первого файла — один раз за загрузку. Сброс выделения посреди пачек его не повторяет.
+    let pinned = get().selected.length > 0
+    const flush = () => {
+      if (timer !== undefined) {
+        clearTimeout(timer)
+        timer = undefined
+      }
+      if (!buffer.length) return
+      const batch = buffer
+      buffer = []
+      commit(batch)
+    }
+    const accept = (incoming: TrackSnapshot[]) => {
+      for (const item of incoming) buffer.push(item)
+      if (!primed) {
+        primed = true
+        flush()
+        return
+      }
+      if (buffer.length >= LOAD_FLUSH_ROWS) {
+        flush()
+        return
+      }
+      if (timer === undefined) timer = setTimeout(flush, LOAD_FLUSH_MS)
     }
     beginLoad(set)
     const stop = window.musicTagEditor.onTrackBatch(accept)
     try {
-      const snapshots = await window.musicTagEditor.readTags(fresh)
+      // stream: треки идут только пачками (onTrackBatch), без повторной отправки всего массива
+      const snapshots = await window.musicTagEditor.readTags(fresh, { stream: true })
       accept(snapshots)
     } catch (error) {
       showToast(set, { kind: 'err', text: error instanceof Error ? error.message : 'Не удалось прочитать файлы' })
     } finally {
       stop()
+      flush()
       endLoad(set)
     }
   },
@@ -555,6 +666,36 @@ export const useEditor = create<EditorState>((set, get) => ({
     if (!paths.length) return
     set({ sourceDir: paths[0] })
     await get().addPaths(paths)
+  },
+
+  loadDetails: async (paths) => {
+    const api = window.musicTagEditor
+    if (!api) return
+    const want = paths.filter((path) => !detailsPending.has(path))
+    if (!want.length) return
+    for (const path of want) detailsPending.add(path)
+    try {
+      for (let index = 0; index < want.length; index += DETAILS_CHUNK) {
+        const chunk = want.slice(index, index + DETAILS_CHUNK)
+        const snapshots = await api.readDetails(chunk)
+        const byPath = new Map(snapshots.filter((item) => !item.error).map((item) => [item.path, item]))
+        if (!byPath.size) continue
+        set((state) => {
+          let changed = false
+          const tracks = state.tracks.map((track) => {
+            const snapshot = byPath.get(track.path)
+            if (!snapshot || track.detailed) return track
+            changed = true
+            return { ...track, tech: snapshot.tech, detailed: true }
+          })
+          return changed ? { tracks } : state
+        })
+      }
+    } catch {
+      /* сведения не критичны: вкладка покажет то, что уже прочитано */
+    } finally {
+      for (const path of want) detailsPending.delete(path)
+    }
   },
 
   refresh: async () => {
@@ -803,6 +944,26 @@ export const useEditor = create<EditorState>((set, get) => ({
       return
     }
     set({ selected: [next], anchor: next, focus: next })
+  },
+
+  goFileHistory: (direction) => {
+    const state = get()
+    const alive = new Set(state.tracks.map((track) => track.path))
+    const step = stepFileNav({ past: state.filePast, future: state.fileFuture }, direction, currentTrackPath(state), alive)
+    if (!step.path) {
+      if (samePaths(state.filePast, step.nav.past) && samePaths(state.fileFuture, step.nav.future)) return
+      set({ filePast: step.nav.past, fileFuture: step.nav.future })
+      return
+    }
+    fileNavLock = true
+    set({
+      filePast: step.nav.past,
+      fileFuture: step.nav.future,
+      selected: [step.path],
+      anchor: step.path,
+      focus: step.path
+    })
+    fileNavLock = false
   },
 
   setListOrder: (paths) => {
@@ -1105,7 +1266,8 @@ export const useEditor = create<EditorState>((set, get) => ({
     const ready = planned.ready
     set({ saving: true, writeErrors: [], savePreview: null, progress: { current: 0, total: ready.length, path: '' } })
     try {
-      const results = await window.musicTagEditor.writeTags(ready)
+      const withCovers = await withFullCovers(ready, state.tracks)
+      const results = await window.musicTagEditor.writeTags(withCovers.send)
       if (results.length !== ready.length) throw new Error('Запись вернула неполный результат')
       const byPath = new Map(ready.map((job) => [job.path, job]))
       const byResult = new Map(results.map((item) => [item.path, item]))
@@ -1127,8 +1289,8 @@ export const useEditor = create<EditorState>((set, get) => ({
             path: nextPath,
             original,
             draft: { ...track.draft, ...job.patch },
-            originalCover: job.cover !== undefined ? job.cover : track.originalCover,
-            draftCover: job.cover !== undefined ? job.cover : track.draftCover
+            originalCover: job.cover !== undefined ? (withCovers.full.get(job.path) ?? job.cover) : track.originalCover,
+            draftCover: job.cover !== undefined ? (withCovers.full.get(job.path) ?? job.cover) : track.draftCover
           }
         })
         const remap = (path: string) => moved.get(path) ?? path
@@ -1171,7 +1333,14 @@ export const useEditor = create<EditorState>((set, get) => ({
     const state = get()
     const job = buildJobs(state.tracks.map(planOf), planState(state)).find((item) => item.path === path)
     if (!job) return
-    const result = await window.musicTagEditor.saveCopy(job)
+    let sendJob = job
+    try {
+      sendJob = (await withFullCovers([job], state.tracks)).send[0]
+    } catch (error) {
+      showToast(set, { kind: 'err', text: error instanceof Error ? error.message : 'Не удалось прочитать обложку' })
+      return
+    }
+    const result = await window.musicTagEditor.saveCopy(sendJob)
     if (result.code === 'cancelled') return
     showToast(set, result.ok ? { kind: 'ok', text: 'Копия сохранена' } : { kind: 'err', text: result.error ?? 'Не удалось сохранить копию' })
     if (result.ok) {
@@ -1224,18 +1393,148 @@ export const useEditor = create<EditorState>((set, get) => ({
   }
 }))
 
+// Перед записью/копией заглушки обложек (lazy) заменяются полными байтами из файлов.
+// Если прочитать нельзя или файл изменился — бросаем ошибку: пустую обложку в файл не пишем никогда.
+async function withFullCovers(jobs: WriteJob[], tracks: TrackVm[]): Promise<{ send: WriteJob[]; full: Map<string, CoverArt | null> }> {
+  const full = new Map<string, CoverArt | null>()
+  const send: WriteJob[] = []
+  for (const job of jobs) {
+    const cover = job.cover
+    if (!cover) {
+      send.push(job)
+      continue
+    }
+    const resolved = cover.lazy ? await loadFullCover(cover, candidatesFor(tracks, cover)) : cover
+    full.set(job.path, resolved)
+    send.push({ ...job, cover: plainCover(resolved) })
+  }
+  return { send, full }
+}
+
 export function readableTracks(tracks: TrackVm[]): TrackVm[] {
   return tracks.filter((track) => !track.error)
 }
 
-let planCache: { state: EditorState; plan: PlanState } | null = null
+type PlanInputs = Parameters<typeof planState>[0]
 
-export function editorPlan(state: EditorState): PlanState {
-  if (planCache?.state === state) return planCache.plan
+const PLAN_INPUT_KEYS = [
+  'tracks',
+  'selected',
+  'applyAll',
+  'applyValues',
+  'applyCover',
+  'sharedCover',
+  'fileMask',
+  'fileDir',
+  'fileAll',
+  'fileNumbers',
+  'fileNumberSeed'
+] as const
+
+// planState читает ещё и настройки (нумерация, токены) — их смена должна сбрасывать кэш.
+let prefsVersion = 0
+
+let planCache: { inputs: PlanInputs; version: number; plan: PlanState } | null = null
+
+function samePlanInputs(a: PlanInputs, b: PlanInputs): boolean {
+  return PLAN_INPUT_KEYS.every((key) => a[key] === b[key])
+}
+
+function samePlanInputsExceptTracks(a: PlanInputs, b: PlanInputs): boolean {
+  return PLAN_INPUT_KEYS.every((key) => key === 'tracks' || a[key] === b[key])
+}
+
+function sameTrackPrefix(prev: readonly TrackVm[], next: readonly TrackVm[]): boolean {
+  if (prev.length > next.length) return false
+  for (let index = 0; index < prev.length; index += 1) if (prev[index] !== next[index]) return false
+  return true
+}
+
+let pathIndex: { tracks: readonly TrackVm[]; map: Map<string, TrackVm> } | null = null
+
+export function trackAt(tracks: readonly TrackVm[], path: string): TrackVm | undefined {
+  if (!path) return undefined
+  let index = pathIndex
+  if (!index || !sameTrackPrefix(index.tracks, tracks)) {
+    const map = new Map<string, TrackVm>()
+    for (const track of tracks) map.set(track.path, track)
+    index = { tracks, map }
+  } else if (index.tracks !== tracks) {
+    for (let at = index.tracks.length; at < tracks.length; at += 1) index.map.set(tracks[at].path, tracks[at])
+    index = { tracks, map: index.map }
+  }
+  pathIndex = index
+  return index.map.get(path)
+}
+
+let selectionCache: { tracks: readonly TrackVm[]; selected: readonly string[]; picked: TrackVm[] } | null = null
+
+export function selectionTracks(state: Pick<EditorState, 'tracks' | 'selected'>): TrackVm[] {
+  const cache = selectionCache
+  if (cache && cache.tracks === state.tracks && cache.selected === state.selected) return cache.picked
+  if (cache && cache.selected === state.selected && sameTrackPrefix(cache.tracks, state.tracks)) {
+    selectionCache = { tracks: state.tracks, selected: state.selected, picked: cache.picked }
+    return cache.picked
+  }
+  const want = new Set(state.selected)
+  const picked = state.tracks.filter((track) => want.has(track.path))
+  selectionCache = { tracks: state.tracks, selected: state.selected, picked }
+  return picked
+}
+
+// Кэш по ВХОДАМ плана, а не по identity state: state новый после любого set, а preparePlan — O(n)
+// по всем трекам. Пока треки/выбор/маска не менялись, план — тот же объект (и memo-строки списка
+// не перерисовываются).
+function cachedPlan(state: PlanInputs): PlanState {
+  if (planCache && planCache.version === prefsVersion && samePlanInputs(planCache.inputs, state)) return planCache.plan
+  // Дописанные в конец треки не меняют план, пока в них нет нумерации. Иначе preparePlan
+  // заново обходит все файлы, и memo-строки списка перерисовываются из-за нового объекта плана.
+  if (
+    planCache &&
+    planCache.version === prefsVersion &&
+    samePlanInputsExceptTracks(planCache.inputs, state) &&
+    sameTrackPrefix(planCache.inputs.tracks, state.tracks) &&
+    !planCache.plan.fileName?.numbers
+  ) {
+    const added = state.tracks.slice(planCache.inputs.tracks.length)
+    if (!added.length || !numberingActive(added.map(planOf), planCache.plan)) {
+      planCache = { inputs: { ...planCache.inputs, tracks: state.tracks }, version: planCache.version, plan: planCache.plan }
+      return planCache.plan
+    }
+  }
   const plan = planState(state)
-  planCache = { state, plan }
+  planCache = {
+    inputs: {
+      tracks: state.tracks,
+      selected: state.selected,
+      applyAll: state.applyAll,
+      applyValues: state.applyValues,
+      applyCover: state.applyCover,
+      sharedCover: state.sharedCover,
+      fileMask: state.fileMask,
+      fileDir: state.fileDir,
+      fileAll: state.fileAll,
+      fileNumbers: state.fileNumbers,
+      fileNumberSeed: state.fileNumberSeed
+    },
+    version: prefsVersion,
+    plan
+  }
   return plan
 }
+
+export function editorPlan(state: EditorState): PlanState {
+  return cachedPlan(state)
+}
+
+let draftCache: {
+  tracks: TrackVm[]
+  applyAll: PlanState['applyAll']
+  applyValues: TrackTags
+  applyCover: boolean
+  sharedCover: CoverArt | null
+  value: number
+} | null = null
 
 export function draftCount(state: Pick<EditorState, 'tracks' | 'applyAll' | 'applyValues' | 'applyCover' | 'sharedCover'>): number {
   const plan: PlanState = {
@@ -1244,13 +1543,92 @@ export function draftCount(state: Pick<EditorState, 'tracks' | 'applyAll' | 'app
     applyCover: state.applyCover,
     sharedCover: state.sharedCover
   }
-  return state.tracks.filter((track) => trackDirty(planOf(track), plan)).length
+  const cache = draftCache
+  if (
+    cache &&
+    cache.tracks === state.tracks &&
+    cache.applyAll === state.applyAll &&
+    cache.applyValues === state.applyValues &&
+    cache.applyCover === state.applyCover &&
+    cache.sharedCover === state.sharedCover
+  ) {
+    return cache.value
+  }
+  if (
+    cache &&
+    cache.applyAll === state.applyAll &&
+    cache.applyValues === state.applyValues &&
+    cache.applyCover === state.applyCover &&
+    cache.sharedCover === state.sharedCover &&
+    sameTrackPrefix(cache.tracks, state.tracks)
+  ) {
+    let value = cache.value
+    for (let index = cache.tracks.length; index < state.tracks.length; index += 1) {
+      if (trackDirty(planOf(state.tracks[index]), plan)) value += 1
+    }
+    draftCache = { tracks: state.tracks, applyAll: state.applyAll, applyValues: state.applyValues, applyCover: state.applyCover, sharedCover: state.sharedCover, value }
+    return value
+  }
+  const value = state.tracks.filter((track) => trackDirty(planOf(track), plan)).length
+  draftCache = {
+    tracks: state.tracks,
+    applyAll: state.applyAll,
+    applyValues: state.applyValues,
+    applyCover: state.applyCover,
+    sharedCover: state.sharedCover,
+    value
+  }
+  return value
 }
 
+let dirtyCache: { plan: PlanState; tracks: TrackVm[]; value: number } | null = null
+
 export function dirtyCount(state: Pick<EditorState, 'tracks' | 'selected' | 'applyAll' | 'applyValues' | 'applyCover' | 'sharedCover' | 'fileMask' | 'fileDir' | 'fileAll' | 'fileNumbers' | 'fileNumberSeed'>): number {
-  return state.tracks.filter((track) => trackDirty(planOf(track), planState(state))).length
+  const plan = cachedPlan(state)
+  if (dirtyCache && dirtyCache.plan === plan && dirtyCache.tracks === state.tracks) return dirtyCache.value
+  if (dirtyCache && dirtyCache.plan === plan && sameTrackPrefix(dirtyCache.tracks, state.tracks)) {
+    let value = dirtyCache.value
+    for (let index = dirtyCache.tracks.length; index < state.tracks.length; index += 1) {
+      if (trackDirty(planOf(state.tracks[index]), plan)) value += 1
+    }
+    dirtyCache = { plan, tracks: state.tracks, value }
+    return value
+  }
+  const value = state.tracks.filter((track) => trackDirty(planOf(track), plan)).length
+  dirtyCache = { plan, tracks: state.tracks, value }
+  return value
 }
 
 subscribePrefs(() => {
+  prefsVersion += 1
   useEditor.setState((state) => ({ fileNumberSeed: state.fileNumberSeed }))
+})
+
+let fileNavLock = false
+let fileNavSeen: string | null = null
+
+useEditor.subscribe((state, prev) => {
+  // Догрузка пачек и правка тегов не меняют текущий файл. Не сканируем все пути на каждое такое обновление.
+  if (
+    state.selected === prev.selected &&
+    state.focus === prev.focus &&
+    state.anchor === prev.anchor &&
+    state.filePast === prev.filePast &&
+    state.fileFuture === prev.fileFuture &&
+    state.tracks.length >= prev.tracks.length
+  ) {
+    return
+  }
+  const current = currentTrackPath(state)
+  if (fileNavLock) {
+    fileNavSeen = current
+    return
+  }
+  const alive = new Set(state.tracks.map((track) => track.path))
+  const next = noteFileVisit({ past: state.filePast, future: state.fileFuture }, fileNavSeen, current, alive)
+  fileNavSeen = current && alive.has(current) ? current : null
+  if (samePaths(state.filePast, next.past) && samePaths(state.fileFuture, next.future)) return
+  fileNavLock = true
+  useEditor.setState({ filePast: next.past, fileFuture: next.future })
+  fileNavLock = false
 })

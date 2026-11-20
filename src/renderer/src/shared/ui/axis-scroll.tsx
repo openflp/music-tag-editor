@@ -1,67 +1,97 @@
 import { useEffect, useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from 'react'
+import { thumbBox } from '@/shared/ui/scroll-metrics'
 
-function useAxisScroll(watch: string) {
+function useAxisScroll(watch: string, extent: number | undefined, smooth: boolean) {
   const bodyRef = useRef<HTMLDivElement>(null)
   const railY = useRef<HTMLDivElement>(null)
   const railX = useRef<HTMLDivElement>(null)
   const thumbY = useRef<HTMLDivElement>(null)
   const thumbX = useRef<HTMLDivElement>(null)
-  const sheetRef = useRef<CSSStyleSheet | null>(null)
-  const ids = useRef({ y: '', x: '' })
   const hideTimer = useRef(0)
   const drag = useRef<{ axis: 'x' | 'y'; pointer: number; start: number } | null>(null)
   const overThumb = useRef(false)
   const overBody = useRef(false)
   const barOnRef = useRef(false)
+  const extentRef = useRef(extent)
+  const smoothRef = useRef(smooth)
+  const shown = useRef({ h: 0, w: 0 })
+  const metrics = useRef({ viewH: 0, viewW: 0, railH: 0, railW: 0 })
+  const scrollPos = useRef({ top: 0, left: 0 })
+  const raf = useRef(0)
   const [overflow, setOverflow] = useState({ x: false, y: false })
   const [edges, setEdges] = useState({ top: false, bottom: false })
   const [barOn, setBarOn] = useState(false)
+  extentRef.current = extent
+  smoothRef.current = smooth
 
-  if (!ids.current.y) {
-    const token = Math.random().toString(36).slice(2, 8)
-    ids.current = { y: `cmd-thumb-y-${token}`, x: `cmd-thumb-x-${token}` }
-  }
-
-  const place = () => {
+  const measure = () => {
     const el = bodyRef.current
     if (!el) return
-    const maxY = el.scrollHeight - el.clientHeight
-    const maxX = el.scrollWidth - el.clientWidth
+    metrics.current.viewH = el.clientHeight
+    metrics.current.viewW = el.clientWidth
+    scrollPos.current.top = el.scrollTop
+    scrollPos.current.left = el.scrollLeft
+    if (railY.current) metrics.current.railH = railY.current.clientHeight
+    if (railX.current) metrics.current.railW = railX.current.clientWidth
+  }
+
+  const placeNow = () => {
+    const el = bodyRef.current
+    const viewH = metrics.current.viewH
+    const viewW = metrics.current.viewW
+    if (viewH <= 0 && viewW <= 0) return
+    const known = extentRef.current
+    // Известная высота (число строк) не требует scrollHeight: измеренный DOM прыгает на каждой пачке.
+    const contentH = known ?? el?.scrollHeight ?? 0
+    const contentW = known == null && el ? el.scrollWidth : viewW
+    const scrollTop = scrollPos.current.top
+    const scrollLeft = scrollPos.current.left
+    const maxY = contentH - viewH
+    const maxX = contentW - viewW
     const next = { y: maxY > 1, x: maxX > 1 }
-    const edge = { top: next.y && el.scrollTop > 1, bottom: next.y && el.scrollTop < maxY - 1 }
+    const edge = { top: next.y && scrollTop > 1, bottom: next.y && scrollTop < maxY - 1 }
     setOverflow((prev) => (prev.x === next.x && prev.y === next.y ? prev : next))
     setEdges((prev) => (prev.top === edge.top && prev.bottom === edge.bottom ? prev : edge))
-    if (!sheetRef.current) {
-      const sheet = new CSSStyleSheet()
-      document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet]
-      sheetRef.current = sheet
-    }
-    const yRail = railY.current
     const yThumb = thumbY.current
-    const xRail = railX.current
+    const railH = metrics.current.railH
+    if (next.y && yThumb && railH > 0) {
+      const target = thumbBox(viewH, contentH, railH, scrollTop)
+      let height = target.height
+      if (!drag.current && smoothRef.current && shown.current.h > 0 && Math.abs(target.height - shown.current.h) > 4) {
+        height = shown.current.h + (target.height - shown.current.h) * 0.35
+        if (Math.abs(height - target.height) > 0.6) schedule()
+      }
+      shown.current.h = height
+      const y = target.max > 0 ? (scrollTop / target.max) * Math.max(0, railH - height) : 0
+      yThumb.style.height = `${height}px`
+      yThumb.style.transform = `translateY(${y}px)`
+    }
     const xThumb = thumbX.current
-    let yRule = ''
-    let xRule = ''
-    if (next.y && yRail && yThumb) {
-      const track = yRail.clientHeight
-      const height = Math.max(28, Math.min(track, (el.clientHeight / el.scrollHeight) * track))
-      const y = (el.scrollTop / Math.max(1, maxY)) * Math.max(0, track - height)
-      yRule = `#${ids.current.y}{height:${height}px;transform:translateY(${y}px)}`
+    const railW = metrics.current.railW
+    if (next.x && xThumb && railW > 0 && known == null) {
+      const target = thumbBox(viewW, contentW, railW, scrollLeft)
+      shown.current.w = target.height
+      xThumb.style.width = `${target.height}px`
+      xThumb.style.transform = `translateX(${target.y}px)`
     }
-    if (next.x && xRail && xThumb) {
-      const track = xRail.clientWidth
-      const width = Math.max(28, Math.min(track, (el.clientWidth / el.scrollWidth) * track))
-      const x = (el.scrollLeft / Math.max(1, maxX)) * Math.max(0, track - width)
-      xRule = `#${ids.current.x}{width:${width}px;transform:translateX(${x}px)}`
-    }
-    sheetRef.current.replaceSync(`${yRule}${xRule}`)
+  }
+
+  const schedule = () => {
+    if (raf.current) return
+    raf.current = requestAnimationFrame(() => {
+      raf.current = 0
+      placeNow()
+    })
   }
 
   const reveal = () => {
     const el = bodyRef.current
     if (!el) return
-    const can = el.scrollHeight - el.clientHeight > 1 || el.scrollWidth - el.clientWidth > 1
-    if (!can) return
+    const viewH = metrics.current.viewH || el.clientHeight
+    const contentH = extentRef.current ?? el.scrollHeight
+    const canY = contentH - viewH > 1
+    const canX = extentRef.current == null && el.scrollWidth - el.clientWidth > 1
+    if (!canY && !canX) return
     if (!barOnRef.current) {
       barOnRef.current = true
       setBarOn(true)
@@ -75,42 +105,53 @@ function useAxisScroll(watch: string) {
     }, 800)
   }
 
+  const latest = useRef({ measure, schedule, reveal, placeNow })
+  latest.current = { measure, schedule, reveal, placeNow }
+
   useLayoutEffect(() => {
     const el = bodyRef.current
     if (!el) return
-    place()
     const onScroll = () => {
-      place()
-      reveal()
+      scrollPos.current.top = el.scrollTop
+      scrollPos.current.left = el.scrollLeft
+      latest.current.schedule()
+      latest.current.reveal()
     }
     const onEnter = () => {
       overBody.current = true
-      reveal()
+      latest.current.reveal()
     }
     const onLeave = () => {
       overBody.current = false
-      reveal()
+      latest.current.reveal()
     }
     el.addEventListener('scroll', onScroll, { passive: true })
     el.addEventListener('pointerenter', onEnter)
     el.addEventListener('pointerleave', onLeave)
-    const observer = new ResizeObserver(() => place())
+    const observer = new ResizeObserver(() => {
+      latest.current.measure()
+      latest.current.placeNow()
+    })
     observer.observe(el)
+    latest.current.measure()
+    latest.current.placeNow()
     return () => {
       el.removeEventListener('scroll', onScroll)
       el.removeEventListener('pointerenter', onEnter)
       el.removeEventListener('pointerleave', onLeave)
       observer.disconnect()
+      if (raf.current) cancelAnimationFrame(raf.current)
+      raf.current = 0
     }
   }, [watch, overflow.x, overflow.y])
+
+  useLayoutEffect(() => {
+    latest.current.schedule()
+  }, [extent, smooth])
 
   useEffect(() => {
     return () => {
       window.clearTimeout(hideTimer.current)
-      const sheet = sheetRef.current
-      if (!sheet) return
-      document.adoptedStyleSheets = document.adoptedStyleSheets.filter((item) => item !== sheet)
-      sheetRef.current = null
     }
   }, [])
 
@@ -129,19 +170,20 @@ function useAxisScroll(watch: string) {
     const el = bodyRef.current
     if (!state || !el) return
     if (state.axis === 'y') {
-      const rail = railY.current
-      const thumb = thumbY.current
-      if (!rail || !thumb) return
-      const max = el.scrollHeight - el.clientHeight
-      const travel = Math.max(1, rail.clientHeight - thumb.getBoundingClientRect().height)
+      const railH = metrics.current.railH
+      const viewH = metrics.current.viewH
+      if (railH <= 0 || viewH <= 0) return
+      const contentH = extentRef.current ?? el.scrollHeight
+      const max = contentH - viewH
+      const travel = Math.max(1, railH - shown.current.h)
       el.scrollTop = state.start + ((event.clientY - state.pointer) / travel) * max
       return
     }
-    const rail = railX.current
-    const thumb = thumbX.current
-    if (!rail || !thumb) return
-    const max = el.scrollWidth - el.clientWidth
-    const travel = Math.max(1, rail.clientWidth - thumb.getBoundingClientRect().width)
+    const railW = metrics.current.railW
+    const viewW = metrics.current.viewW
+    if (railW <= 0 || viewW <= 0) return
+    const max = el.scrollWidth - viewW
+    const travel = Math.max(1, railW - shown.current.w)
     el.scrollLeft = state.start + ((event.clientX - state.pointer) / travel) * max
   }
 
@@ -156,7 +198,6 @@ function useAxisScroll(watch: string) {
       {overflow.y ? (
         <div ref={railY} className={barOn ? `cmd-rail cmd-rail-y live${overflow.x ? ' cross' : ''}` : `cmd-rail cmd-rail-y${overflow.x ? ' cross' : ''}`}>
           <div
-            id={ids.current.y}
             ref={thumbY}
             className="cmd-thumb-y"
             onPointerDown={onThumbDown('y')}
@@ -175,7 +216,6 @@ function useAxisScroll(watch: string) {
       {overflow.x ? (
         <div ref={railX} className={barOn ? `cmd-rail cmd-rail-x live${overflow.y ? ' cross' : ''}` : `cmd-rail cmd-rail-x${overflow.y ? ' cross' : ''}`}>
           <div
-            id={ids.current.x}
             ref={thumbX}
             className="cmd-thumb-x"
             onPointerDown={onThumbDown('x')}
@@ -201,14 +241,18 @@ export function AxisScroll({
   className,
   watch,
   shade,
+  extent,
+  smooth = false,
   children
 }: {
   className?: string
   watch: string
   shade?: boolean
+  extent?: number
+  smooth?: boolean
   children: (ref: RefObject<HTMLDivElement | null>) => ReactNode
 }) {
-  const scroll = useAxisScroll(watch)
+  const scroll = useAxisScroll(watch, extent, smooth)
   return (
     <div className={className ? `cmd-scroll ${className}` : 'cmd-scroll'}>
       {children(scroll.bodyRef)}

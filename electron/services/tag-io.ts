@@ -2,7 +2,7 @@ import { copyFile, access, rename, unlink, constants, stat } from 'node:fs/promi
 import { statSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname, basename, join, extname, resolve } from 'node:path'
-import { randomBytes } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import type { ByteVector, File as TagFile, IPicture } from 'node-taglib-sharp'
 import {
   MAX_COVER_BYTES,
@@ -42,15 +42,37 @@ function errorSnapshot(filePath: string, error: unknown): TrackSnapshot {
   }
 }
 
-function coverFromPictures(pictures: IPicture[] | undefined): CoverArt | null {
+// Отпечаток содержимого обложки: размер + начало sha1. Тот же алгоритм — в renderer (drop.ts).
+export function coverKey(bytes: Uint8Array): string {
+  return `${bytes.byteLength}:${createHash('sha1').update(bytes).digest('hex').slice(0, 20)}`
+}
+
+// lazy: base64 не собираем и по IPC не гоним — только mime, размер и отпечаток.
+function coverFromPictures(pictures: IPicture[] | undefined, lazy: boolean, src: string): CoverArt | null {
   if (!pictures?.length) return null
   const picture = pictures.find((item) => item.type === PictureType.FrontCover) ?? pictures[0]
   const bytes = Buffer.from(picture.data.toByteArray())
   if (bytes.byteLength === 0 || bytes.byteLength > MAX_COVER_BYTES) return null
-  return {
-    mime: picture.mimeType || 'image/jpeg',
-    bytes: bytes.byteLength,
-    dataBase64: bytes.toString('base64')
+  const mime = picture.mimeType || 'image/jpeg'
+  const key = coverKey(bytes)
+  if (lazy) return { mime, bytes: bytes.byteLength, dataBase64: '', key, lazy: true, src }
+  return { mime, bytes: bytes.byteLength, dataBase64: bytes.toString('base64'), key }
+}
+
+// Только обложка файла (для миниатюр и показа): без остальных тегов и свойств.
+export function readCoverOnly(filePath: string): CoverArt | null {
+  let file: TagFile | null = null
+  try {
+    file = File.createFromPath(filePath)
+    return coverFromPictures(file.tag.pictures, false, filePath)
+  } catch {
+    return null
+  } finally {
+    try {
+      file?.dispose()
+    } catch {
+      /* ignore */
+    }
   }
 }
 
@@ -100,11 +122,24 @@ function readTags(tag: TagFile['tag']): TrackTags {
   }
 }
 
-export function readTrack(filePath: string): TrackSnapshot {
+// «Лёгкое» чтение для списка: describeMedia (обход всех фреймов/полей, до 300 фактов) —
+// самая дорогая часть, а нужна только во вкладке «Информация». Дешёвые свойства берём напрямую.
+function mediaBasics(file: TagFile): ReturnType<typeof describeMedia> {
+  return {
+    encoder: '',
+    container: text(file.properties.description).trim(),
+    lossless: (file.properties.mediaTypes & 16) !== 0,
+    tagTypes: '',
+    channelMode: '',
+    facts: []
+  }
+}
+
+export function readTrack(filePath: string, lite = false, cover: 'lazy' | 'full' | 'none' = lite ? 'lazy' : 'full'): TrackSnapshot {
   let file: TagFile | null = null
   try {
     file = File.createFromPath(filePath)
-    const media = (() => {
+    const media = lite ? mediaBasics(file) : (() => {
       try {
         return describeMedia(file)
       } catch {
@@ -116,7 +151,8 @@ export function readTrack(filePath: string): TrackSnapshot {
       path: filePath,
       format: extname(filePath).toLowerCase(),
       tags: readTags(file.tag),
-      cover: coverFromPictures(file.tag.pictures),
+      detailed: !lite,
+      cover: cover === 'none' ? null : coverFromPictures(file.tag.pictures, cover === 'lazy', filePath),
       tech: {
         durationMs: file.properties.durationMilliseconds || 0,
         bitrate: file.properties.audioBitrate || 0,
@@ -145,7 +181,7 @@ export function readTrack(filePath: string): TrackSnapshot {
         replayGain: [gainText('трек', file.tag.replayGainTrackGain, file.tag.replayGainTrackPeak), gainText('альбом', file.tag.replayGainAlbumGain, file.tag.replayGainAlbumPeak)]
           .filter(Boolean)
           .join(' · '),
-        lyrics: text(file.tag.lyrics).slice(0, MAX_LYRICS_CHARS)
+        lyrics: lite ? '' : text(file.tag.lyrics).slice(0, MAX_LYRICS_CHARS)
       }
     }
   } catch (error) {
@@ -172,6 +208,7 @@ function applyPatch(file: TagFile, job: WriteJob): void {
   if (patch.lyrics !== undefined) tag.lyrics = patch.lyrics
   if (job.cover === null) tag.pictures = []
   if (job.cover) {
+    if (job.cover.lazy || !job.cover.dataBase64) throw new InputError('Обложка не загружена')
     const data: ByteVector = Bytes.fromByteArray(Buffer.from(job.cover.dataBase64, 'base64'))
     tag.pictures = [Picture.fromFullData(data, PictureType.FrontCover, job.cover.mime, 'Front Cover')]
   }
