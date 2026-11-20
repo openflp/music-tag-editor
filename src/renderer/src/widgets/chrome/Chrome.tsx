@@ -1,5 +1,5 @@
 import { useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react'
-import { flushSync } from 'react-dom'
+import { createPortal, flushSync } from 'react-dom'
 import { editorPlan, useEditor, type TrackVm } from '@/features/editor/model/store'
 import { CoverImg } from '@/entities/track/cover-thumb'
 import { Command, CommandDialog, CommandInput, CommandList } from '@/components/ui/command'
@@ -56,7 +56,7 @@ type FileRow = {
   track: TrackVm
   title: string
   artist: string
-  number: number | undefined
+  number: string | undefined   // было: number | undefined
   text: string
 }
 
@@ -555,16 +555,24 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
 
 export function DragOverlay({ mode, count }: { mode: DropMode | null; count: number }) {
   const { pack } = useI18n()
-  const title = mode === 'cover' ? pack.dropCover : mode === 'comment' ? pack.dropComment : pack.dropRelease
-  const detail = mode === 'cover' || mode === 'comment' ? '' : count > 0 ? `${count} ${fileWord(count, pack)}` : pack.filesOrFolder
-  return (
-    <div className="drag-overlay" aria-hidden="true">
+  // Последний показанный режим держим, пока оверлей гаснет: иначе текст успевает смениться на «файлы».
+  const last = useRef<{ mode: DropMode; count: number }>({ mode: 'library', count: 0 })
+  if (mode) last.current = { mode, count }
+  const shown = last.current
+  const title = shown.mode === 'cover' ? pack.dropCover : shown.mode === 'comment' ? pack.dropComment : pack.dropRelease
+  const detail =
+    shown.mode === 'cover' || shown.mode === 'comment' ? '' : shown.count > 0 ? `${shown.count} ${fileWord(shown.count, pack)}` : pack.filesOrFolder
+  // В body, а не внутри .shell: у .shell стоит container-type: size, и position: fixed внутри него
+  // считается от самой оболочки. Из body оверлей накрывает всё окно, включая titlebar.
+  return createPortal(
+    <div className={mode ? 'drag-overlay on' : 'drag-overlay'} aria-hidden="true">
       <div className="drag-card">
         <UploadIcon />
         <strong>{title}</strong>
         {detail ? <span>{detail}</span> : null}
       </div>
-    </div>
+    </div>,
+    document.body
   )
 }
 

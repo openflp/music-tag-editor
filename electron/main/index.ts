@@ -394,11 +394,10 @@ function registerIpc(): void {
     const stream = Boolean(options && typeof options === 'object' && (options as { stream?: unknown }).stream === true)
     const collected: TrackSnapshot[] = []
     await readAll(inputs, (tracks) => {
-      if (!stream) {
-        for (const track of tracks) collected.push(track)
-        return
-      }
-      // потоковый режим: пачки только через IPC.trackBatch, повторно весь массив не отправляем
+      // итог копим всегда: в потоковом режиме им добирается то, что не дошло пачками
+      // (рендерер отсекает дубли по пути)
+      for (const track of tracks) collected.push(track)
+      if (!stream) return
       if (!event.sender.isDestroyed()) event.sender.send(IPC.trackBatch, tracks)
     })
     return collected

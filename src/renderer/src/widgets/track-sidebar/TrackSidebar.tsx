@@ -6,6 +6,7 @@ import {
   useMemo,
   useRef,
   useState,
+  startTransition,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
   type ReactNode
@@ -58,6 +59,10 @@ type SideSort = 'open' | 'name' | 'title' | 'artist' | 'created' | 'modified' | 
 
 const ROW = 46
 const OVERSCAN = 24
+// окно строк двигается шагами по WINDOW_STEP, а не на каждую строку
+const WINDOW_STEP = 4
+// постоянная времени сглаживания ползунка (мс): за это время он проходит ~63% пути к новой высоте списка
+const THUMB_EASE_MS = 110
 // padding-bottom у .track-list по умолчанию. Входит в высоту прокрутки, но не в строки.
 // Реальное значение читается в measure(): при открытом статус-баре оно 64 или 160px.
 const LIST_TAIL = 10
@@ -92,7 +97,7 @@ function sameFiles(left: readonly string[], right: readonly string[]): boolean {
   return right.every((path) => known.has(path))
 }
 
-function viewportRows(list: HTMLUListElement | null): { first: number; last: number } {
+function viewportRows(list: HTMLElement | null): { first: number; last: number } {
   if (!list || list.clientHeight <= 0) return { first: 0, last: 0 }
   return {
     first: Math.floor(list.scrollTop / ROW),
@@ -372,21 +377,23 @@ export function TrackSidebar({ loading, collapsed = false }: { loading: boolean;
   const [edges, setEdges] = useState({ top: false, bottom: false })
   const [overflow, setOverflow] = useState(false)
   const [barOn, setBarOn] = useState(false)
-  const listRef = useRef<HTMLUListElement>(null)
+  const listRef = useRef<HTMLDivElement>(null)
+  const canvasRef = useRef<HTMLDivElement>(null)
+  const windowRef = useRef<HTMLUListElement>(null)
   const railRef = useRef<HTMLDivElement>(null)
   const thumbRef = useRef<HTMLDivElement>(null)
-  const sheetRef = useRef<CSSStyleSheet | null>(null)
   const hideTimer = useRef(0)
   const drag = useRef<{ y: number; top: number } | null>(null)
   const overThumb = useRef(false)
   const overList = useRef(false)
   const barOnRef = useRef(false)
-  const cssRef = useRef('')
   const scrollRef = useRef(0)
   const knownTracks = useRef<readonly TrackVm[]>([])
   const orderRef = useRef<readonly TrackVm[]>([])
   const metrics = useRef({ view: 0, rail: 0, tail: LIST_TAIL })
   const thumbDraw = useRef(0)
+  const shownContent = useRef(0)
+  const thumbTime = useRef(0)
   const thumbRaf = useRef(0)
   const scrollGen = useRef(0)
   const [motion, setMotion] = useState<ListMotion>({
@@ -436,18 +443,20 @@ export function TrackSidebar({ loading, collapsed = false }: { loading: boolean;
     if (!tracks.length) setSort('open')
   }, [tracks.length])
 
-  const paintSpacers = (start: number, end: number, count: number) => {
-    const pad = start * ROW
-    const rest = Math.max(0, count - end) * ROW
-    const css = `.track-list{--list-pad:${pad}px;--list-rest:${rest}px}`
-    if (css === cssRef.current) return
-    cssRef.current = css
-    if (!sheetRef.current) {
-      const sheet = new CSSStyleSheet()
-      document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet]
-      sheetRef.current = sheet
+  // Окно строк двигается transform'ом, а полная высота задаётся одному контейнеру.
+  // Раньше отступы шли через CSS-переменные в adoptedStyleSheets: каждый сдвиг окна инвалидировал стили
+  // всех строк (переменные наследуются) и пересчитывал раскладку flex-колонки. Transform не трогает ни то, ни другое.
+  const paintWindow = (start: number, count: number) => {
+    const canvas = canvasRef.current
+    const win = windowRef.current
+    if (canvas) {
+      const height = `${count * ROW}px`
+      if (canvas.style.height !== height) canvas.style.height = height
     }
-    sheetRef.current.replaceSync(css)
+    if (win) {
+      const shift = `translate3d(0, ${start * ROW}px, 0)`
+      if (win.style.transform !== shift) win.style.transform = shift
+    }
   }
 
   const drawThumb = () => {
@@ -462,18 +471,31 @@ export function TrackSidebar({ loading, collapsed = false }: { loading: boolean;
     setEdges((prev) => (prev.top === top && prev.bottom === bottom ? prev : { top, bottom }))
     setOverflow((prev) => (prev === can ? prev : can))
     const thumb = thumbRef.current
+    if (!can) shownContent.current = 0
     if (!can || !thumb || railH <= 0) return
-    const target = thumbBox(view, content, railH, scroll)
-    let height = target.height
-    // Высота догоняет известное число строк по кадрам. Позиция — от кэшированного scrollTop, без чтения layout.
-    if (!drag.current && thumbDraw.current > 0 && Math.abs(target.height - thumbDraw.current) > 4) {
-      height = thumbDraw.current + (target.height - thumbDraw.current) * 0.35
-      if (Math.abs(height - target.height) > 0.6) scheduleThumb()
+    // Раньше сглаживалась только высота ползунка, а позиция считалась от нового max сразу —
+    // при догрузке пачки ползунок прыгал. Теперь «показываемая» высота списка догоняет реальную,
+    // а и высота, и позиция ползунка выводятся из неё одновременно.
+    const now = performance.now()
+    const dt = Math.min(64, thumbTime.current ? now - thumbTime.current : 16)
+    thumbTime.current = now
+    let shown = shownContent.current
+    if (drag.current || shown <= 0) shown = content
+    else {
+      const diff = content - shown
+      if (Math.abs(diff) < 1) shown = content
+      else {
+        shown += diff * (1 - Math.exp(-dt / THUMB_EASE_MS))
+        scheduleThumb()
+      }
     }
-    thumbDraw.current = height
-    const y = target.max > 0 ? (scroll / target.max) * Math.max(0, railH - height) : 0
-    thumb.style.height = `${height}px`
-    thumb.style.transform = `translateY(${y}px)`
+    shown = Math.max(shown, view + 2)
+    shownContent.current = shown
+    const target = thumbBox(view, shown, railH, scroll)
+    thumbDraw.current = target.height
+    const y = Math.min(target.y, Math.max(0, railH - target.height))
+    thumb.style.height = `${target.height}px`
+    thumb.style.transform = `translate3d(0, ${y}px, 0)`
   }
 
   const scheduleThumb = () => {
@@ -490,12 +512,23 @@ export function TrackSidebar({ loading, collapsed = false }: { loading: boolean;
     const count = countRef.current
     const view = metrics.current.view || el.clientHeight
     if (view && metrics.current.view !== view) metrics.current.view = view
-    const next = virtualRange(el.scrollTop, view, count, ROW, OVERSCAN)
-    paintSpacers(next.start, next.end, count)
+    const raw = virtualRange(el.scrollTop, view, count, ROW, OVERSCAN)
+    const next = {
+      start: Math.floor(raw.start / WINDOW_STEP) * WINDOW_STEP,
+      end: Math.min(count, Math.ceil(raw.end / WINDOW_STEP) * WINDOW_STEP)
+    }
     const current = spanRef.current
     if (current.start === next.start && current.end === next.end) return
-    if (flush) flushSync(() => setSpan(next))
-    else setSpan(next)
+    if (!flush) {
+      setSpan(next)
+      return
+    }
+    // Все видимые строки уже отрисованы (запас OVERSCAN ещё не выбран): сдвиг окна не срочный.
+    // Монтируем новые строки в transition: прокрутка не ждёт коммит и не «застревает» на пачке строк.
+    // Пустое место на экране возможно только если окно не покрывает видимое — тогда синхронно, как раньше.
+    const seen = virtualRange(el.scrollTop, view, count, ROW, 0)
+    if (seen.start >= current.start && seen.end <= current.end) startTransition(() => setSpan(next))
+    else flushSync(() => setSpan(next))
   }
 
   const reveal = () => {
@@ -554,6 +587,12 @@ export function TrackSidebar({ loading, collapsed = false }: { loading: boolean;
     }
   }, [])
 
+  // transform окна ставится после КОММИТА и берётся из отрисованного span, а не из желаемого:
+  // при отложенном (transition) обновлении строки и сдвиг всегда совпадают.
+  useLayoutEffect(() => {
+    paintWindow(span.start, countRef.current)
+  })
+
   useLayoutEffect(() => {
     measure()
     syncWindow(false)
@@ -600,10 +639,8 @@ export function TrackSidebar({ loading, collapsed = false }: { loading: boolean;
     return () => {
       window.clearTimeout(hideTimer.current)
       if (thumbRaf.current) cancelAnimationFrame(thumbRaf.current)
-      const sheet = sheetRef.current
-      if (!sheet) return
-      document.adoptedStyleSheets = document.adoptedStyleSheets.filter((item) => item !== sheet)
-      sheetRef.current = null
+      // Иначе scheduleThumb() после ремаунта (StrictMode/HMR) навсегда выходит по раннему return.
+      thumbRaf.current = 0
     }
   }, [])
 
@@ -849,12 +886,9 @@ export function TrackSidebar({ loading, collapsed = false }: { loading: boolean;
         }}
       >
       <ContextMenuTrigger asChild>
-      <ul
+      <div
         ref={listRef}
         className={`track-list${motion.defer && motion.entered.size ? ' defer-in' : ''}${loading || motion.entered.size > BULK_ROWS ? ' bulk' : ''}`}
-        role="listbox"
-        aria-multiselectable="true"
-        aria-label={pack.tracks}
         onContextMenu={(event) => {
           const target = event.target
           const row = target instanceof Element ? target.closest('.track-row') : null
@@ -868,6 +902,8 @@ export function TrackSidebar({ loading, collapsed = false }: { loading: boolean;
           setMenuPath(path)
         }}
       >
+      <div ref={canvasRef} className="track-canvas">
+      <ul ref={windowRef} className="track-window" role="listbox" aria-multiselectable="true" aria-label={pack.tracks}>
         {rows.map(({ track, leaving }, i) => (
           <TrackRow
             key={track.path}
@@ -884,6 +920,8 @@ export function TrackSidebar({ loading, collapsed = false }: { loading: boolean;
           />
         ))}
       </ul>
+      </div>
+      </div>
       </ContextMenuTrigger>
       <TrackMenuContent path={menuPath} group={menuPath !== null && picked.has(menuPath) && selected.length > 1} broken={menuBroken} />
       </ContextMenu>

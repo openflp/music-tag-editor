@@ -94,6 +94,8 @@ type TitlebarMenuId = (typeof MENU_IDS)[number]
 
 const OVERFLOW_BTN_PX = 22
 const MENU_GAP_PX = 2
+// зазор между последним пунктом меню и кнопками истории (.title-file-nav)
+const NAV_GAP_PX = 8
 
 function MenuKey({ id }: { id: 'open' | 'folder' | 'save' | 'undo' | 'redo' | 'palette' }) {
   const chord = useShortcut(id)
@@ -255,9 +257,17 @@ function BarMenu({ onPalette }: { onPalette: () => void }) {
       try {
         const widths = menus.map((_, index) => itemRefs.current[index]?.offsetWidth ?? 0)
         if (widths.some((width) => width <= 0)) return
+        // Кнопки истории лежат absolute слева от поиска и вылезают в левую колонку, где живёт меню.
+        // Они не занимают место в раскладке, поэтому доступную ширину считаем сами: до левого края кнопок.
+        let available = host.offsetWidth
+        const nav = document.querySelector('.title-file-nav')
+        if (nav instanceof HTMLElement && getComputedStyle(nav).visibility !== 'hidden') {
+          const room = nav.getBoundingClientRect().left - host.getBoundingClientRect().left - NAV_GAP_PX
+          available = Math.max(0, Math.min(available, Math.floor(room)))
+        }
         const next = packTitlebarMenuOverflow({
           itemWidths: widths,
-          available: host.offsetWidth,
+          available,
           overflowWidth: OVERFLOW_BTN_PX,
           gap: MENU_GAP_PX
         })
@@ -267,9 +277,20 @@ function BarMenu({ onPalette }: { onPalette: () => void }) {
       }
     }
     update()
+    // кнопки истории монтируются позже меню (отдельный портал), поэтому пересчитываем и на следующем кадре
+    const frame = requestAnimationFrame(update)
     const observer = new ResizeObserver(update)
     observer.observe(host)
-    return () => observer.disconnect()
+    // позиция кнопок зависит от ширины окна и центральной колонки, а не только от самого host
+    const bar = document.querySelector('.cet-titlebar')
+    if (bar instanceof HTMLElement) observer.observe(bar)
+    const mutations = bar instanceof HTMLElement ? new MutationObserver(update) : null
+    if (bar instanceof HTMLElement) mutations?.observe(bar, { childList: true, subtree: true })
+    return () => {
+      cancelAnimationFrame(frame)
+      observer.disconnect()
+      mutations?.disconnect()
+    }
   }, [locale])
 
   return (
@@ -288,9 +309,12 @@ function BarMenu({ onPalette }: { onPalette: () => void }) {
               style={{
                 visibility: collapsed ? 'hidden' : undefined,
                 pointerEvents: collapsed ? 'none' : undefined,
+                // Скрытые пункты нужны только для замера ширины. Раньше они лежали в (0,0) меню и, раз они идут
+                // в DOM после видимых, их drag-область перекрывала no-drag первых пунктов и сидела поверх меню.
+                // Уводим их за верхний край окна: ни на что не влияют, ширина по-прежнему измеряется.
                 position: collapsed ? 'absolute' : undefined,
                 left: collapsed ? 0 : undefined,
-                top: collapsed ? 0 : undefined
+                top: collapsed ? -100 : undefined
               }}
             >
               {menu.label}

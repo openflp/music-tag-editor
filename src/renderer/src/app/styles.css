@@ -129,13 +129,27 @@ textarea {
   -webkit-user-select: none;
 }
 
+/* Ширина системных кнопок окна справа (свернуть/развернуть/закрыть).
+   Раньше везде стояло жёсткое 138px — это размер Windows-overlay, и на Linux правая группа
+   (sidebar / player / настройки) отступала от края на те же 138px и съезжала к поиску.
+   Теперь: явная --mte-overlay-width, если её кто-то задал; иначе реальная ширина из
+   Window Controls Overlay (env titlebar-area-*), а 138px остаются только запасным минимумом
+   на Windows. Без overlay (Linux с кнопками библиотеки) отступ равен 0. */
+.cet-titlebar {
+  --mte-overlay-auto: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw));
+  --mte-overlay-floor: 0px;
+  --mte-overlay-eff: var(--mte-overlay-width, max(var(--mte-overlay-auto), var(--mte-overlay-floor)));
+}
+
+.cet-titlebar.cet-windows { --mte-overlay-floor: 138px; }
+
 .cet-titlebar {
   display: grid !important;
   grid-template-columns:
     minmax(0, 1fr)
     minmax(0, 1fr)
     minmax(
-      calc(var(--mte-settings-width, 40px) + var(--mte-sidebar-toggle-width, 30px) + var(--mte-player-toggle-width, 30px) + var(--mte-overlay-width, 138px) + var(--mte-window-controls-width, 0px)),
+      calc(var(--mte-settings-width, 40px) + var(--mte-sidebar-toggle-width, 30px) + var(--mte-player-toggle-width, 30px) + var(--mte-overlay-eff) + var(--mte-window-controls-width, 0px)),
       1fr
     ) !important;
   align-items: center !important;
@@ -248,8 +262,8 @@ textarea {
 #mte-titlebar-right {
   justify-content: flex-end;
   box-sizing: border-box;
-  min-width: calc(var(--mte-settings-width, 40px) + var(--mte-sidebar-toggle-width, 30px) + var(--mte-player-toggle-width, 30px) + var(--mte-overlay-width, 138px) + var(--mte-window-controls-width, 0px));
-  padding-right: var(--mte-overlay-width, 138px);
+  min-width: calc(var(--mte-settings-width, 40px) + var(--mte-sidebar-toggle-width, 30px) + var(--mte-player-toggle-width, 30px) + var(--mte-overlay-eff) + var(--mte-window-controls-width, 0px));
+  padding-right: var(--mte-overlay-eff);
   overflow: hidden;
 }
 
@@ -1098,7 +1112,7 @@ label.menu-item { cursor: pointer; }
   margin: 0;
   padding: 0 10px 10px;
   overflow: auto;
-  /* виртуальный список сам двигает --list-pad/--list-rest; браузерная scroll-anchoring
+  /* виртуальный список сам двигает окно строк (.track-window); браузерная scroll-anchoring
      поверх этого сдвигает scrollTop и даёт обратную связь окно ↔ прокрутка */
   overflow-anchor: none;
   scrollbar-width: none;
@@ -1108,19 +1122,25 @@ label.menu-item { cursor: pointer; }
   display: flex;
   flex-direction: column;
   gap: 0;
-  --list-pad: 0px;
-  --list-rest: 0px;
 }
 
-.track-list::before,
-.track-list::after {
-  content: '';
-  display: block;
+.track-canvas {
+  position: relative;
   flex: none;
+  width: 100%;
 }
 
-.track-list::before { height: var(--list-pad); }
-.track-list::after { height: var(--list-rest); }
+/* высота canvas и transform окна ставит TrackSidebar (paintWindow) */
+.track-window {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  will-change: transform;
+}
 
 .drag-line {
   position: absolute;
@@ -1398,37 +1418,71 @@ label.menu-item { cursor: pointer; }
   margin-top: 8px;
 }
 
+/* ════════════════════════════════════════════════════════════════
+   DRAG & DROP: то же стекло, что у command (--glass-bg, blur 28 / saturate 1.35,
+   без рамки), на всё окно, включая titlebar. Внутри — как пустое состояние
+   command: плитка-иконка, заголовок и подсказка.
+   Появление и уход плавные: вместо display — opacity + visibility.
+   ════════════════════════════════════════════════════════════════ */
 .drag-overlay {
-  position: absolute;
-  z-index: 25;
-  top: 8px;
-  right: 8px;
-  bottom: 8px;
-  left: 8px;
-  display: none;
-  place-items: center;
+  position: fixed;
+  z-index: 100010;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 6px;
   text-align: center;
-  border: 2px dashed var(--link);
-  
-  background: rgb(var(--accent-rgb) / 0.14);
-  color: var(--link);
+  border: 0;
+  border-radius: 0;
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: blur(28px) saturate(1.35);
+  backdrop-filter: blur(28px) saturate(1.35);
+  opacity: 0;
+  visibility: hidden;
   pointer-events: none;
+  transition: opacity 140ms ease, visibility 0s linear 140ms;
 }
 
-.shell.over .drag-overlay { display: grid; }
+.drag-overlay.on {
+  opacity: 1;
+  visibility: visible;
+  transition: opacity 180ms ease, visibility 0s;
+}
 
 .drag-card {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
+  display: grid;
+  justify-items: center;
   gap: 6px;
   max-width: 360px;
   padding: 16px;
+  transform: scale(0.98);
+  transition: transform 220ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-.drag-overlay strong { color: var(--text); font-size: 14px; font-weight: 600; }
+.drag-overlay.on .drag-card { transform: none; }
 
-.drag-overlay span { font-size: 12px; color: var(--text-2); }
+/* плитка-иконка: как выбранная строка command — акцент и тёмный глиф */
+.drag-card > svg {
+  width: 56px;
+  height: 56px;
+  padding: 16px;
+  margin-bottom: 8px;
+  border-radius: 16px;
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.drag-overlay strong {
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.drag-overlay span {
+  color: var(--faint);
+  font-size: 13px;
+}
 
 .track-head {
   min-height: 56px;
@@ -4751,7 +4805,6 @@ label.menu-item { cursor: pointer; }
   clip-path: inset(0 round var(--r-card));
 }
 
-.drag-overlay { border-radius: var(--r-panel); }
 
 /* ── список треков ── */
 .track-row { border-radius: 12px; }
@@ -5078,6 +5131,20 @@ kbd {
 .sheet-tabs > .sheet-tab[data-active],
 .sheet-tabs > .sheet-tab[data-state='active'] {
   animation: sheet-tab-on 240ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* Вкладки внутри command: та же анимация, что у .sheet-tab */
+.cmd-tab {
+  transition: color 0.22s ease, background-color 0.22s ease;
+}
+
+.cmd-tab.on {
+  animation: sheet-tab-on 240ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cmd-tab { transition-duration: 0.01ms; }
+  .cmd-tab.on { animation-duration: 0.01ms; }
 }
 
 
@@ -5742,4 +5809,36 @@ kbd {
   [data-slot="dialog-overlay"]:has(+ .command-glass)[data-state="closed"] {
     animation-duration: 0.01ms;
   }
+}
+
+/* Ползунок списка двигается каждый кадр: выносим на свой слой, чтобы backdrop-filter не перерисовывал список */
+.list-thumb { will-change: transform, height; }
+
+
+/* ════════════════════════════════════════════════════════════════
+   TITLEBAR: перетаскивание окна за любое свободное место слева.
+   Drag-область = объединение drag-прямоугольников минус no-drag, в порядке DOM,
+   поэтому интерактивными (no-drag) остаются только сами пункты меню, а всё
+   остальное в левой колонке — иконка с отступом, зазор, поля вокруг меню и
+   свободный хвост menubar — явно помечено как drag.
+   ════════════════════════════════════════════════════════════════ */
+#mte-titlebar-left,
+#mte-titlebar-left .cet-icon,
+#mte-titlebar-left .cet-icon img,
+#mte-titlebar-menu-host,
+.mte-titlebar-menubar {
+  -webkit-app-region: drag;
+}
+
+/* свободное место в menubar: сам контейнер на всю ширину, без внутренних отступов, не режущих drag */
+.mte-titlebar-menubar {
+  width: 100%;
+  min-width: 0;
+}
+
+.mte-titlebar-menubar.is-icon { width: auto; }
+
+/* пункты — единственное, что в левой колонке принимает клики */
+.mte-titlebar-menubar [data-slot="menubar-trigger"]:not([aria-hidden="true"]) {
+  -webkit-app-region: no-drag;
 }
