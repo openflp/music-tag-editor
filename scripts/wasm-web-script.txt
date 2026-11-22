@@ -1,0 +1,11 @@
+ersion 3 along with this program.  If not, see http://www.gnu.org/licenses/
+ */
+
+var EssentiaWASM = (function() {
+  var _scriptDir = typeof document !== 'undefined' && document.currentScript ? document.currentScript.src : undefined;
+  
+  return (
+function(EssentiaWASM) {
+  EssentiaWASM = EssentiaWASM || {};
+
+var Module=typeof EssentiaWASM!=="undefined"?EssentiaWASM:{};var readyPromiseResolve,readyPromiseReject;Module["ready"]=new Promise(function(resolve,reject){readyPromiseR

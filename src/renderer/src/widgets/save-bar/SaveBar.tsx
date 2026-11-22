@@ -652,8 +652,54 @@ export function SidebarStatus() {
   )
 }
 
+// Строка изменения вида «Поле: было → стало». Пустое значение (—, ∅, «пусто») = поля не было / его убрали.
+const DIFF_ARROW = /\s*(?:→|⟶|=>|->)\s*/
+const DIFF_EMPTY = new Set(['', '—', '–', '-', '∅', 'пусто', '(пусто)', 'empty', '(empty)'])
+
+type DiffLine = { label: string; from: string; to: string }
+
+function parseDiffLine(line: string): DiffLine | null {
+  const parts = line.split(DIFF_ARROW)
+  if (parts.length !== 2) return null
+  const head = parts[0]
+  // подпись — только если до двоеточия идёт текст, а не время вроде «3:45»
+  const match = head.match(/^(\D[^:→]{0,39}):\s*(.*)$/)
+  const label = match ? match[1].trim() : ''
+  const from = (match ? match[2] : head).trim()
+  const to = parts[1].trim()
+  const clean = (value: string) => (DIFF_EMPTY.has(value.toLowerCase()) ? '' : value)
+  const result = { label, from: clean(from), to: clean(to) }
+  return result.from || result.to ? result : null
+}
+
+function SaveLine({ line }: { line: string }) {
+  const diff = parseDiffLine(line)
+  if (!diff) {
+    const sign = /^\+\s/.test(line) ? ' add' : /^[-−–]\s/.test(line) ? ' del' : ''
+    return <li className={`save-line${sign}`}>{line}</li>
+  }
+  return (
+    <li className={diff.label ? 'save-line diff' : 'save-line diff solo'}>
+      {diff.label ? (
+        <span className="diff-label" title={diff.label}>
+          {diff.label}
+        </span>
+      ) : null}
+      <span className="diff-values">
+        {diff.from ? <del className="diff-old">{diff.from}</del> : null}
+        {diff.from && diff.to ? (
+          <span className="diff-arrow" aria-hidden="true">
+            →
+          </span>
+        ) : null}
+        {diff.to ? <ins className="diff-new">{diff.to}</ins> : null}
+      </span>
+    </li>
+  )
+}
+
 export function SaveDialogs() {
-  const { pack } = useI18n()
+  const { locale, pack } = useI18n()
   const preview = useEditor((state) => state.savePreview)
   const resetAsk = useEditor((state) => state.resetAsk)
   const closeAsk = useEditor((state) => state.closeAsk)
@@ -666,10 +712,29 @@ export function SaveDialogs() {
   const saving = useEditor((state) => state.saving)
   const count = preview?.length ?? 0
   const filesLabel = fileWord(count, pack)
+  // поиск только фильтрует показ: записываются ВСЕ файлы из preview
+  const [query, setQuery] = useState('')
+  const boxRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (preview) return
+    setQuery('')
+    if (boxRef.current) boxRef.current.style.minHeight = ''
+  }, [preview])
+  // при поиске фиксируем высоту списка: окно не прыгает, пока результатов меньше
+  const onSearch = (value: string) => {
+    const box = boxRef.current
+    if (box) box.style.minHeight = value.trim() ? (box.style.minHeight || `${box.offsetHeight}px`) : ''
+    setQuery(value)
+  }
+  const needle = query.trim().toLowerCase()
+  const shown = !preview || !needle
+    ? preview
+    : preview.filter((file) => file.name.toLowerCase().includes(needle) || file.lines.some((line) => line.toLowerCase().includes(needle)))
+  const searchLabel = String(locale).startsWith('ru') ? 'Поиск по файлам' : 'Search files'
   return (
     <>
       <Dialog open={resetAsk} onOpenChange={(open) => { if (!open) dismissReset() }}>
-        <DialogContent className="ask-dialog" data-no-track-nav="" showCloseButton={false}>
+        <DialogContent className="ask-dialog" data-no-track-nav="">
           <DialogTitle>{pack.askResetTitle}</DialogTitle>
           <DialogDescription>{pack.askResetBody}</DialogDescription>
           <div className="ask-actions">
@@ -679,7 +744,7 @@ export function SaveDialogs() {
         </DialogContent>
       </Dialog>
       <Dialog open={closeAsk} onOpenChange={(open) => { if (!open) dismissClose() }}>
-        <DialogContent className="ask-dialog" data-no-track-nav="" showCloseButton={false}>
+        <DialogContent className="ask-dialog" data-no-track-nav="">
           <DialogTitle>{pack.askCloseTitle}</DialogTitle>
           <DialogDescription>{pack.askCloseBody}</DialogDescription>
           <div className="ask-actions">
@@ -689,25 +754,47 @@ export function SaveDialogs() {
         </DialogContent>
       </Dialog>
       <Dialog open={Boolean(preview)} onOpenChange={(open) => { if (!open) dismissSave() }}>
-        <DialogContent className="ask-dialog" data-no-track-nav="" showCloseButton={false}>
+        <DialogContent className="ask-dialog" data-no-track-nav="">
           <DialogTitle>{pack.askSaveTitle(count, filesLabel)}</DialogTitle>
           <DialogDescription>{pack.askSaveBody}</DialogDescription>
-          <AxisScroll className="save-scroll" watch={String(count)} shade>
-            {(ref) => (
-              <div ref={ref} className="save-preview">
-                {preview?.map((file) => (
-                  <section key={file.path} className="save-file">
-                    <b>{file.name}</b>
-                    <ul>
-                      {file.lines.map((line) => (
-                        <li key={line}>{line}</li>
-                      ))}
-                    </ul>
-                  </section>
-                ))}
-              </div>
-            )}
-          </AxisScroll>
+          <div className="save-search">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <circle cx="11" cy="11" r="7" />
+              <path d="m20 20-3.5-3.5" />
+            </svg>
+            <input
+              type="text"
+              value={query}
+              onChange={(event) => onSearch(event.target.value)}
+              placeholder={searchLabel}
+              aria-label={searchLabel}
+              spellCheck={false}
+              autoComplete="off"
+            />
+            {needle ? <span className="save-search-count">{shown?.length ?? 0}/{count}</span> : null}
+          </div>
+          <div ref={boxRef} className="save-list">
+            <AxisScroll className="save-scroll" watch={`${count}:${needle}`} shade>
+              {(ref) => (
+                <div ref={ref} className="save-preview">
+                  {needle && shown?.length === 0 ? <p className="save-empty">{pack.nothingFound}</p> : null}
+                  {shown?.map((file) => (
+                    <section key={file.path} className="save-file">
+                      <div className="save-file-head">
+                        <b>{file.name}</b>
+                        <span className="save-file-count">{file.lines.length}</span>
+                      </div>
+                      <ul>
+                        {file.lines.map((line, index) => (
+                          <SaveLine key={`${index}-${line}`} line={line} />
+                        ))}
+                      </ul>
+                    </section>
+                  ))}
+                </div>
+              )}
+            </AxisScroll>
+          </div>
           <div className="ask-actions">
             <button type="button" className="btn" onClick={dismissSave} disabled={saving}>{pack.cancel}</button>
             <button type="button" className="btn primary" onClick={confirmSave} disabled={saving}>{pack.write}</button>

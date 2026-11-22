@@ -4689,6 +4689,18 @@ label.menu-item { cursor: pointer; }
 
 .info-tools { display: flex; gap: 2px; }
 
+.prop-row .info-spinner {
+  width: 12px;
+  height: 12px;
+  margin-top: 5px;
+  display: inline-block;
+  vertical-align: top;
+  border: 2px solid rgba(255, 255, 255, 0.18);
+  border-top-color: var(--text);
+  border-radius: 50%;
+  animation: cmd-spin 0.7s linear infinite;
+}
+
 .info-pane .info-scroll {
   flex: 1;
   min-height: 0;
@@ -5178,16 +5190,16 @@ kbd {
 
 /* переключатель чуть крупнее и с фокусом с клавиатуры */
 .settings-switch {
-  width: 36px;
-  height: 20px;
+  width: 32px;
+  height: 18px;
 }
 
 .settings-switch span {
-  width: 16px;
-  height: 16px;
+  width: 14px;
+  height: 14px;
 }
 
-.settings-switch.on span { transform: translateX(16px); }
+.settings-switch.on span { transform: translateX(14px); }
 
 .settings-switch:focus-visible,
 .settings-nav-item:focus-visible,
@@ -5313,9 +5325,9 @@ kbd {
 
 .settings-nav-item.on,
 .settings-nav-item.on:hover {
-  background: rgb(var(--accent-rgb) / 0.16);
-  box-shadow: inset 0 0 0 1px rgb(var(--accent-rgb) / 0.38);
-  color: var(--link);
+  background: rgb(255 255 255 / 0.12);
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.10);
+  color: var(--text);
 }
 
 .settings-nav-item:not(.on):hover { background: rgb(255 255 255 / 0.06); }
@@ -5511,7 +5523,8 @@ kbd {
 
   /* индикаторы загрузки остаются «живыми», но медленнее */
   .list-spinner,
-  .cmd-spinner {
+  .cmd-spinner,
+  .info-spinner {
     animation-duration: 1.6s !important;
     animation-iteration-count: infinite !important;
   }
@@ -5842,3 +5855,217 @@ kbd {
 .mte-titlebar-menubar [data-slot="menubar-trigger"]:not([aria-hidden="true"]) {
   -webkit-app-region: no-drag;
 }
+
+/* ════════════════════════════════════════════════════════════════
+   ОКНО «ЗАПИСАТЬ ТЕГИ В N ФАЙЛОВ»
+   Три зоны: шапка (заголовок + описание) | список | кнопки, без пустых
+   зазоров между ними. В покое линий нет: линия появляется вместе с
+   тенью прокрутки (.cmd-edge.top.on / .cmd-edge.bottom.on) и гаснет
+   вместе с ней — как .list-edge в sidebar. Цвет: --save-edge-line
+   (--line, 8%, на этом фоне почти не виден, поэтому --field-line, 14%).
+   ════════════════════════════════════════════════════════════════ */
+
+/* убираем gap у grid-диалога: отступы задаём внутри зон */
+.ask-dialog:has(.save-scroll) { gap: 0; }
+
+.ask-dialog:has(.save-scroll) [data-slot="dialog-description"] {
+  margin-top: 10px;
+  padding-bottom: 12px;
+}
+
+.ask-dialog:has(.save-scroll) .ask-actions { padding-top: 12px; }
+
+.ask-dialog .save-scroll { --save-edge-line: var(--field-line); }
+
+/* линии: скрыты, пока соответствующая тень не горит */
+.ask-dialog .save-scroll::before,
+.ask-dialog .save-scroll::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 1px;
+  z-index: 3;
+  pointer-events: none;
+  background: var(--save-edge-line);
+  opacity: 0;
+  transition: opacity 0.6s ease;
+}
+
+.ask-dialog .save-scroll::before { top: 0; }
+.ask-dialog .save-scroll::after { bottom: 0; }
+
+.ask-dialog .save-scroll:has(.cmd-edge.top.on)::before,
+.ask-dialog .save-scroll:has(.cmd-edge.bottom.on)::after {
+  opacity: 1;
+  transition-duration: 0.15s;
+}
+
+/* верхняя тень — только градиент: её встроенная линия легла бы второй */
+.ask-dialog .save-scroll .cmd-edge.top {
+  background: linear-gradient(rgba(0, 0, 0, 0.55), rgba(0, 0, 0, 0));
+}
+
+/* в покое никаких линий по краям списка: убираем border-top у первого файла */
+.ask-dialog .save-file:first-child { border-top: 0; padding-top: 10px; }
+.ask-dialog .save-file:last-child { padding-bottom: 10px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .ask-dialog .save-scroll::before,
+  .ask-dialog .save-scroll::after { transition-duration: 0.01ms; }
+}
+
+/* ── крестик закрытия в окнах .ask-dialog (запись тегов, сброс, закрытие) ── */
+.ask-dialog [data-slot="dialog-title"] { padding-right: 52px; }
+
+.ask-dialog [data-slot="dialog-close"] {
+  top: 10px;
+  right: 10px;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  color: var(--muted);
+  background: transparent;
+  border-radius: var(--r-pill);
+}
+
+.ask-dialog [data-slot="dialog-close"] svg { width: 14px; height: 14px; }
+
+.ask-dialog [data-slot="dialog-close"]:hover {
+  color: var(--text);
+  background: var(--hover-solid);
+}
+
+.ask-dialog [data-slot="dialog-close"]:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--focus);
+}
+
+/* ── строка поиска в окне записи тегов (стиль как .settings-search) ── */
+.save-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  margin: 0 16px 14px;
+  padding: 0 12px;
+  box-sizing: border-box;
+  border: 1px solid var(--input-line);
+  border-radius: var(--r-pill);
+  background: transparent;
+  color: var(--muted);
+}
+
+.save-search svg { flex: none; }
+
+.save-search:focus-within {
+  border-color: var(--link);
+  box-shadow: 0 0 0 3px var(--focus);
+}
+
+.save-search input {
+  flex: 1;
+  width: 100%;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text);
+  box-shadow: none;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.save-search input::placeholder { color: var(--faint); }
+
+.save-search-count {
+  flex: none;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--faint);
+}
+
+/* «Ничего не найдено» — строго по центру области списка (и по горизонтали, и по вертикали).
+   Позиционируется от .save-scroll (position: relative), а не от прокручиваемого .save-preview,
+   поэтому высота списка (её держит .save-list) не зависит от самого текста. */
+.save-empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  margin: 0;
+  padding: 0 16px;
+  text-align: center;
+  color: var(--muted);
+  pointer-events: none;
+}
+
+/* ── окно записи тегов: список, шапка файла, цветовая разница ── */
+
+/* контейнер держит высоту при поиске (minHeight ставит SaveBar), линии остаются на местах */
+.save-list { display: flex; flex-direction: column; min-width: 0; }
+.save-list > .save-scroll { flex: 1 1 auto; }
+
+.save-file-head { display: flex; align-items: flex-start; gap: 8px; }
+.save-file-head b { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+
+.save-file-count {
+  flex: none;
+  min-width: 20px;
+  padding: 1px 7px;
+  box-sizing: border-box;
+  border-radius: var(--r-pill);
+  background: rgb(255 255 255 / 0.06);
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.save-file li.save-line { padding: 3px 0; }
+
+.save-line.diff {
+  display: grid;
+  grid-template-columns: 104px minmax(0, 1fr);
+  column-gap: 10px;
+  align-items: start;
+}
+
+.save-line.diff.solo { grid-template-columns: minmax(0, 1fr); }
+
+.diff-label {
+  overflow: hidden;
+  padding: 1px 0;
+  color: var(--faint);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.diff-values { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; min-width: 0; }
+
+.diff-old,
+.diff-new {
+  max-width: 100%;
+  padding: 1px 7px;
+  border-radius: 6px;
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+
+/* красное — было (удалено), зелёное — стало (добавлено / новое значение) */
+.diff-old {
+  background: var(--danger-bg);
+  color: var(--danger);
+  text-decoration: line-through;
+  text-decoration-color: rgb(251 129 129 / 0.55);
+}
+
+.diff-new { background: var(--ok-bg); color: var(--ok); }
+
+.diff-arrow { flex: none; color: var(--faint); }
+
+/* строки без стрелки, но со знаком: «+ …» / «− …» */
+.save-line.add { color: var(--ok); }
+.save-line.del { color: var(--danger); }

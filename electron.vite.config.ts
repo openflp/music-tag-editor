@@ -2,7 +2,9 @@ import { cpSync, existsSync, mkdirSync } from 'node:fs'
 import { resolve } from 'node:path'
 import tailwindcss from '@tailwindcss/vite'
 import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
+import type { ViteDevServer } from 'vite'
 import react from '@vitejs/plugin-react'
+import { browserEssentiaWasm } from './electron/essentia-wasm'
 
 function copyTitlebarTheme() {
   return {
@@ -17,10 +19,22 @@ function copyTitlebarTheme() {
   }
 }
 
+function essentiaWasmBrowser() {
+  return {
+    name: 'essentia-wasm-browser',
+    enforce: 'pre' as const,
+    transform(code: string, id: string) {
+      const file = id.split('?')[0]?.replace(/\\/g, '/')
+      if (!file?.endsWith('essentia.js/dist/essentia-wasm.es.js')) return null
+      return { code: browserEssentiaWasm(code), map: null }
+    }
+  }
+}
+
 function keepDevWatcherAlive() {
   return {
     name: 'keep-dev-watcher-alive',
-    configureServer(server) {
+    configureServer(server: ViteDevServer) {
       server.watcher.on('error', (error: Error & { code?: string }) => {
         const code = error.code
         if (code === 'EBUSY' || code === 'EPERM' || code === 'EACCES' || code === 'ENOENT') return
@@ -79,6 +93,13 @@ export default defineConfig({
         '@shared': resolve('shared')
       }
     },
-    plugins: [keepDevWatcherAlive(), react(), tailwindcss()]
+    plugins: [essentiaWasmBrowser(), keepDevWatcherAlive(), react(), tailwindcss()],
+    optimizeDeps: {
+      exclude: ['essentia.js']
+    },
+    worker: {
+      format: 'es',
+      plugins: () => [essentiaWasmBrowser()]
+    }
   }
 })

@@ -125,6 +125,7 @@ interface EditorState {
   saveAll: () => Promise<void>
   saveCopy: (path: string) => Promise<void>
   notify: (toast: Toast) => void
+  noteRhythm: (path: string, bpm: number, key: string) => void
   requestPlay: (path: string) => void
   dismissToast: () => void
   holdToast: () => void
@@ -686,7 +687,10 @@ export const useEditor = create<EditorState>((set, get) => ({
             const snapshot = byPath.get(track.path)
             if (!snapshot || track.detailed) return track
             changed = true
-            return { ...track, tech: snapshot.tech, detailed: true }
+            const tech = { ...snapshot.tech }
+            if (!tech.bpm && track.tech.bpm) tech.bpm = track.tech.bpm
+            if (!tech.key && track.tech.key) tech.key = track.tech.key
+            return { ...track, tech, detailed: true }
           })
           return changed ? { tracks } : state
         })
@@ -1360,6 +1364,14 @@ export const useEditor = create<EditorState>((set, get) => ({
   },
 
   notify: (toast) => showToast(set, toast),
+
+  noteRhythm: (path, bpm, key) => {
+    set((state) => ({
+      tracks: state.tracks.map((track) =>
+        track.path === path ? { ...track, tech: { ...track.tech, bpm, key } } : track
+      )
+    }))
+  },
 
   requestPlay: (path) => {
     const state = get()

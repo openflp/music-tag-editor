@@ -6,6 +6,7 @@ import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, nativeTheme, sc
 import { packFor, type LocaleId } from '@shared/i18n'
 import { parseLanguagePack } from '@shared/language-pack'
 import { IPC, type AppSettings, type HistoryMap, type MenuCommand, type TrackSnapshot, type WriteJob, type WriteResult } from '@shared/types'
+import { readStoredRhythm } from '../services/rhythm'
 import { TITLEBAR_BACKGROUND, TITLEBAR_FOREGROUND, TITLEBAR_OVERLAY_HEIGHT, WINDOW_MIN_HEIGHT, WINDOW_MIN_WIDTH } from '@shared/titlebar'
 import { installMediaProtocol, registerMediaScheme } from './media'
 import { attachTitlebar } from './titlebar'
@@ -21,9 +22,17 @@ const here = dirname(fileURLToPath(import.meta.url))
 
 const DRAG_PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64')
 
-function dragIcon() {
-  const icon = nativeImage.createFromBuffer(DRAG_PNG).resize({ width: 32, height: 32 })
+let dragImage: Electron.NativeImage | null = null
+
+// Иконка под курсором при перетаскивании: иконка приложения (кэшируется), запасной вариант — DRAG_PNG.
+function dragIcon(): Electron.NativeImage {
+  if (dragImage && !dragImage.isEmpty()) return dragImage
+  const file = resolveAppIcon('icon.png')
+  const fromApp = file ? nativeImage.createFromPath(file) : nativeImage.createEmpty()
+  const base = fromApp.isEmpty() ? nativeImage.createFromBuffer(DRAG_PNG) : fromApp
+  const icon = base.resize({ width: 48, height: 48 })
   if (icon.isEmpty()) throw new Error('Пустая иконка перетаскивания')
+  dragImage = icon
   return icon
 }
 
@@ -114,8 +123,8 @@ function installCsp(): void {
   // В dev Vite вставляет inline-преамбулу React Refresh. В сборке Monaco
   // поднимает воркер через blob и дописывает стили темы в <style>.
   const policy = dev
-    ? "default-src 'self' data: blob:; script-src 'self' 'unsafe-inline' 'unsafe-eval'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; media-src media:; connect-src 'self' ws: http://localhost:*"
-    : "default-src 'self'; script-src 'self'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; style-src-attr 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; media-src media:; object-src 'none'; base-uri 'self'; frame-src 'none'"
+    ? "default-src 'self' data: blob:; script-src 'self' 'unsafe-inline' 'unsafe-eval'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; media-src media:; connect-src 'self' media: ws: http://localhost:*"
+    : "default-src 'self'; script-src 'self'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; style-src-attr 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; media-src media:; connect-src 'self' media:; object-src 'none'; base-uri 'self'; frame-src 'none'"
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
     callback({
       responseHeaders: {
@@ -441,6 +450,8 @@ function registerIpc(): void {
     return collected
   })
 
+  ipcMain.handle(IPC.readRhythm, async (_event, payload: unknown) => readStoredRhythm(assertAudioFilePath(payload)))
+
   ipcMain.handle(IPC.writeTags, async (_event, payload: unknown) => writeAll(assertWriteJobs(payload)))
 
   ipcMain.handle(IPC.openCover, async () => {
@@ -495,13 +506,14 @@ function registerIpc(): void {
     return writeTrack({ path: result.filePath, patch: job.patch, cover: job.cover })
   })
 
+  // Асинхронный send из preload: рендерер не ждёт ответа и не зависает на время перетаскивания.
   ipcMain.on(IPC.dragFiles, (event, payload: unknown) => {
     try {
       const files = assertDragFiles(payload)
       if (!files.length) return
       event.sender.startDrag({ file: files[0], files, icon: dragIcon() })
-    } catch {
-      return
+    } catch (error) {
+      console.error('startDrag failed', error)
     }
   })
 

@@ -95,6 +95,12 @@ export function App() {
       setDropMode(null)
       setDropCount(0)
     }
+    // Перетаскивание наших же треков наружу ведёт ОС (startDrag): dragend в рендерер не приходит,
+    // поэтому свой драг помечаем флагом и не показываем оверлей / не принимаем drop.
+    let selfDrag = false
+    const clearSelf = () => {
+      selfDrag = false
+    }
     const onStart = (event: DragEvent) => {
       const target = event.target
       const row = target instanceof Element ? target.closest('.track-row') : null
@@ -105,8 +111,11 @@ export function App() {
       const state = useEditor.getState()
       const group = state.selected.includes(path) ? state.listOrder.filter((item) => state.selected.includes(item)) : []
       window.musicTagEditor?.dragFiles(group.length ? group : [path])
+      selfDrag = true
+      hide()
     }
     const onDragOver = (event: DragEvent) => {
+      if (selfDrag) return
       const info = dropInfo(event.dataTransfer)
       // Not a file drag (text into an input, Monaco selection...): leave it to the browser.
       if (!info.files) return
@@ -116,10 +125,18 @@ export function App() {
       setDropCount((prev) => (prev === info.count ? prev : info.count))
     }
     const onLeave = (event: DragEvent) => {
-      const left = event.clientX <= 0 || event.clientY <= 0 || event.clientX >= window.innerWidth || event.clientY >= window.innerHeight
-      if (left) hide()
+      // у dragleave на границе окна relatedTarget === null (надёжнее, чем сравнение координат)
+      if (event.relatedTarget !== null) return
+      selfDrag = false
+      hide()
     }
     const onDrop = (event: DragEvent) => {
+      if (selfDrag) {
+        event.preventDefault()
+        selfDrag = false
+        hide()
+        return
+      }
       const files = event.dataTransfer?.files
       if (!files?.length) {
         hide()
@@ -170,12 +187,17 @@ export function App() {
     document.addEventListener('dragover', onDragOver)
     document.addEventListener('dragleave', onLeave)
     document.addEventListener('drop', onDrop)
+    // после нативного драга страница не получает mousemove до его конца — первое движение сбрасывает флаг
+    document.addEventListener('mousemove', clearSelf, true)
+    window.addEventListener('blur', hide)
     return () => {
       document.removeEventListener('dragstart', onStart, true)
       document.removeEventListener('dragend', hide)
       document.removeEventListener('dragover', onDragOver)
       document.removeEventListener('dragleave', onLeave)
       document.removeEventListener('drop', onDrop)
+      document.removeEventListener('mousemove', clearSelf, true)
+      window.removeEventListener('blur', hide)
     }
   }, [])
 

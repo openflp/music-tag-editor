@@ -206,6 +206,10 @@ function applyPatch(file: TagFile, job: WriteJob): void {
   if (patch.discTotal !== undefined) tag.discCount = patch.discTotal ?? 0
   if (patch.comment !== undefined) tag.comment = patch.comment
   if (patch.lyrics !== undefined) tag.lyrics = patch.lyrics
+  if (job.rhythm) {
+    tag.beatsPerMinute = job.rhythm.bpm
+    tag.initialKey = job.rhythm.initialKey
+  }
   if (job.cover === null) tag.pictures = []
   if (job.cover) {
     if (job.cover.lazy || !job.cover.dataBase64) throw new InputError('Обложка не загружена')

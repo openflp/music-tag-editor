@@ -1,5 +1,6 @@
 import type { LocaleId } from '@shared/i18n'
 import type { LanguagePack } from '@shared/language-pack'
+import type { StoredRhythm } from '@shared/analysis'
 import type { AppSettings, AppSettingsSnapshot, CoverArt, HistoryMap, MenuCommand, ProgressEvent, TrackSnapshot, WriteJob, WriteResult } from '@shared/types'
 
 export interface MusicApi {
@@ -10,6 +11,7 @@ export interface MusicApi {
   // stream: true — треки приходят только пачками через onTrackBatch, итоговый массив пустой
   readTags: (paths: string[], options?: { stream?: boolean }) => Promise<TrackSnapshot[]>
   readDetails: (paths: string[]) => Promise<TrackSnapshot[]>
+  readRhythm: (path: string) => Promise<StoredRhythm>
   readCovers: (paths: string[]) => Promise<{ path: string; cover: CoverArt | null }[]>
   onTrackBatch: (callback: (tracks: TrackSnapshot[]) => void) => () => void
   writeTags: (jobs: WriteJob[]) => Promise<WriteResult[]>

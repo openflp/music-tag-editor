@@ -1,18 +1,21 @@
 import { useEffect, useMemo, useState } from 'react'
 import { baseName, formatBadge, formatBitrate, formatBytes, formatDuration, formatRate, formatStamp } from '@/entities/track/lib'
 import { useEditor, type TrackVm } from '@/features/editor/model/store'
+import { displayKey } from '@shared/analysis'
 import { camelotOf } from '@shared/key'
 import type { Pack } from '@shared/i18n'
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from '@/components/ui/context-menu'
 import { Hint } from '@/components/ui/tooltip'
 import { AxisScroll } from '@/shared/ui/axis-scroll'
 import { CheckIcon, CopyIcon, DownloadIcon, FileIcon, FolderIcon, FolderOutIcon, OpenExternalIcon } from '@/shared/ui/icons'
+import { useAudioAnalysis } from '@/features/analysis/use-audio-analysis'
 import { getPack, menuLocaleOf, useI18n } from '@/shared/i18n'
 
 interface InfoRow {
   label: string
   value: string
   copy: string
+  slow?: boolean
 }
 
 function uniform(values: string[]): string {
@@ -203,8 +206,8 @@ function bpmOf(track: TrackVm): string {
 
 function keyOf(track: TrackVm): string {
   const stored = track.tech.key?.trim()
-  if (stored) return stored
-  return fromFacts(track, ['TKEY', 'INITIALKEY', 'KEY', 'INITIAL KEY'])
+  const raw = stored || fromFacts(track, ['TKEY', 'INITIALKEY', 'KEY', 'INITIAL KEY'])
+  return displayKey(raw)
 }
 
 function encoderOf(track: TrackVm): string {
@@ -229,7 +232,7 @@ function rowsOf(tracks: TrackVm[], locale: string): InfoRow[] {
   const pack = getPack()
   const one = tracks.length === 1 ? tracks[0] : null
   const cell = (read: (track: TrackVm) => string) => uniform(tracks.map(read))
-  const row = (label: string, value: string, copy = value): InfoRow => ({ label, value, copy })
+  const row = (label: string, value: string, copy = value, slow = false): InfoRow => ({ label, value, copy, slow })
   const sameText = (left: string, right: string) => left.trim().toLowerCase() === right.trim().toLowerCase()
   const codec = cell((track) => track.tech.codec ?? '')
   const container = cell((track) => track.tech.container ?? '')
@@ -251,10 +254,12 @@ function rowsOf(tracks: TrackVm[], locale: string): InfoRow[] {
     row(pack.infoBits, cell((track) => (track.tech.bitsPerSample ? `${track.tech.bitsPerSample} ${pack.bits}` : ''))),
     row(pack.infoLossless, cell((track) => (track.tech.codec || track.format ? (track.tech.lossless ? pack.yes : pack.no) : ''))),
     row(pack.infoTagTypes, cell((track) => track.tech.tagTypes ?? '')),
-    row('BPM', cell(bpmOf)),
-    row(pack.infoKey, cell(keyOf)),
-    row('Camelot', cell((track) => camelotOf(keyOf(track)))),
     row(pack.infoEncoder, cell(encoderOf))
+  ]
+  const rhythm: InfoRow[] = [
+    row('BPM', cell(bpmOf), cell(bpmOf), true),
+    row(pack.infoKey, cell(keyOf), cell(keyOf), true),
+    row('Camelot', cell((track) => camelotOf(keyOf(track))), cell((track) => camelotOf(keyOf(track))), true)
   ]
   const keys: string[] = []
   for (const track of tracks) {
@@ -280,7 +285,8 @@ function rowsOf(tracks: TrackVm[], locale: string): InfoRow[] {
     seen.add(signature)
     return true
   })
-  return [...summary, ...extra]
+  const collator = new Intl.Collator(locale, { sensitivity: 'base', numeric: true })
+  return [...rhythm, ...summary, ...extra].sort((left, right) => collator.compare(left.label, right.label))
 }
 
 function report(items: InfoRow[]): string {
@@ -339,11 +345,13 @@ export function InfoPane({ tracks }: { tracks: TrackVm[] }) {
   useEffect(() => {
     if (pendingKey) void loadDetails(pendingKey.split('\n'))
   }, [pendingKey, loadDetails])
+  const single = tracks.length === 1
+  const analysis = useAudioAnalysis(single ? tracks[0].path : null)
   const [rowIndex, setRowIndex] = useState<number | null>(null)
   const items = useMemo(() => rowsOf(tracks, menuLocaleOf(locale)), [tracks, locale])
   const text = report(items)
-  const single = tracks.length === 1
   const row = rowIndex === null ? null : items[rowIndex] ?? null
+  const rowPending = Boolean(row?.slow && analysis.loading)
   const copyText = (value: string) => {
     void navigator.clipboard.writeText(value).catch(() => notify({ kind: 'err', text: pack.copyFail }))
   }
@@ -393,15 +401,19 @@ export function InfoPane({ tracks }: { tracks: TrackVm[] }) {
                 }}
               >
                 {items.map((item, index) => {
-                  const ready = canCopy(item.copy, pack.mixedShort)
+                  const pending = Boolean(item.slow && analysis.loading)
+                  const ready = !pending && canCopy(item.copy, pack.mixedShort)
                   return (
                     <div
                       className={rowIndex === index ? 'prop-row active' : 'prop-row'}
-                      key={`${item.label}:${item.copy}:${index}`}
+                      key={`${item.label}:${index}`}
                       onContextMenu={() => setRowIndex(index)}
                     >
                       <span>{item.label}</span>
-                      <b>{item.value || '—'}{ready ? <CopyButton text={item.copy} label={pack.copyItem(item.label)} /> : null}</b>
+                      <b>
+                        {pending ? <span className="info-spinner" role="status" aria-label={pack.reading} /> : item.value || '—'}
+                        {ready ? <CopyButton text={item.copy} label={pack.copyItem(item.label)} /> : null}
+                      </b>
                     </div>
                   )
                 })}
@@ -410,11 +422,11 @@ export function InfoPane({ tracks }: { tracks: TrackVm[] }) {
           )}
         </AxisScroll>
         <ContextMenuContent>
-          <ContextMenuItem disabled={!row || !canCopy(row.copy, pack.mixedShort)} onSelect={() => row && copyText(row.copy)}>
+          <ContextMenuItem disabled={!row || rowPending || !canCopy(row.copy, pack.mixedShort)} onSelect={() => row && copyText(row.copy)}>
             <CopyIcon />
             {pack.copyValue}
           </ContextMenuItem>
-          <ContextMenuItem disabled={!row || !canCopy(row.copy, pack.mixedShort)} onSelect={() => row && copyText(`${row.label}: ${row.copy}`)}>
+          <ContextMenuItem disabled={!row || rowPending || !canCopy(row.copy, pack.mixedShort)} onSelect={() => row && copyText(`${row.label}: ${row.copy}`)}>
             <CopyIcon />
             {pack.copyLine}
           </ContextMenuItem>

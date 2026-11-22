@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import { initCustomTitlebar } from './titlebar'
+import type { StoredRhythm } from '@shared/analysis'
 import type { LanguagePack } from '@shared/language-pack'
 import {
   IPC,
@@ -22,6 +23,7 @@ const api = {
   pickFolder: (): Promise<string | null> => ipcRenderer.invoke(IPC.pickFolder),
   readTags: (paths: string[], options?: { stream?: boolean }): Promise<TrackSnapshot[]> => ipcRenderer.invoke(IPC.readTags, paths, options),
   readDetails: (paths: string[]): Promise<TrackSnapshot[]> => ipcRenderer.invoke(IPC.readDetails, paths),
+  readRhythm: (path: string): Promise<StoredRhythm> => ipcRenderer.invoke(IPC.readRhythm, path),
   readCovers: (paths: string[]): Promise<{ path: string; cover: CoverArt | null }[]> => ipcRenderer.invoke(IPC.readCovers, paths),
   onTrackBatch: (callback: (tracks: TrackSnapshot[]) => void): (() => void) => {
     const listener = (_event: unknown, payload: TrackSnapshot[]) => callback(payload)
@@ -48,7 +50,7 @@ const api = {
   getHistory: (): Promise<HistoryMap> => ipcRenderer.invoke(IPC.historyGet),
   pushHistory: (entries: Partial<HistoryMap>): Promise<HistoryMap> => ipcRenderer.invoke(IPC.historyPush, entries),
   dragFiles: (paths: string[]): void => {
-    ipcRenderer.sendSync(IPC.dragFiles, paths)
+    ipcRenderer.send(IPC.dragFiles, paths)
   },
   copyFiles: (paths: string[]): Promise<void> => ipcRenderer.invoke(IPC.copyFiles, paths),
   copyText: (text: string): Promise<void> => ipcRenderer.invoke(IPC.copyText, text),

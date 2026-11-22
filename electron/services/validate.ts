@@ -1,6 +1,6 @@
 import { statSync } from 'node:fs'
 import { extname, resolve } from 'node:path'
-import { AUDIO_EXTENSIONS, IMAGE_EXTENSIONS, ISSUES_URL, MAX_COVER_BYTES, MAX_FILES, MAX_LYRICS_CHARS, MENU_BAR_MODES, REPOSITORY_URL, ZOOM_STEPS, type AppSettings, type CoverArt, type MenuBarMode, type WriteJob, type ZoomStep } from '@shared/types'
+import { AUDIO_EXTENSIONS, IMAGE_EXTENSIONS, ISSUES_URL, MAX_COVER_BYTES, MAX_FILES, MAX_LYRICS_CHARS, MENU_BAR_MODES, REPOSITORY_URL, ZOOM_STEPS, type AppSettings, type CoverArt, type MenuBarMode, type RhythmWrite, type WriteJob, type ZoomStep } from '@shared/types'
 
 const AUDIO = new Set<string>(AUDIO_EXTENSIONS)
 const IMAGES = new Set<string>(IMAGE_EXTENSIONS)
@@ -145,6 +145,18 @@ function assertOptionalString(value: unknown, label: string, max = 4000): void {
   if (typeof value !== 'string' || value.length > max) throw new InputError(`Поле «${label}» слишком длинное`)
 }
 
+export function assertRhythmWrite(value: unknown): RhythmWrite {
+  if (!value || typeof value !== 'object') throw new InputError('Некорректный темп')
+  const item = value as RhythmWrite
+  if (typeof item.bpm !== 'number' || !Number.isFinite(item.bpm) || item.bpm <= 0 || item.bpm > 400) {
+    throw new InputError('Некорректный темп')
+  }
+  if (typeof item.initialKey !== 'string' || !/^[\dA-Za-z#b♯♭m ]{1,32}$/.test(item.initialKey.trim())) {
+    throw new InputError('Некорректная тональность')
+  }
+  return { bpm: Math.round(item.bpm * 10) / 10, initialKey: item.initialKey.trim() }
+}
+
 export function assertWriteJob(value: unknown): WriteJob {
   if (!value || typeof value !== 'object') throw new InputError('Некорректное задание записи')
   const job = value as WriteJob
@@ -165,6 +177,7 @@ export function assertWriteJob(value: unknown): WriteJob {
   assertOptionalNumber(patch.discNumber, 'номер диска')
   assertOptionalNumber(patch.discTotal, 'число дисков')
   assertCover(job.cover)
+  const rhythm = job.rhythm == null ? undefined : assertRhythmWrite(job.rhythm)
   let targetPath: string | undefined
   if (job.targetPath != null) {
     targetPath = assertAudioFilePath(job.targetPath)
@@ -173,7 +186,10 @@ export function assertWriteJob(value: unknown): WriteJob {
     const same = process.platform === 'linux' ? left === right : left.toLowerCase() === right.toLowerCase()
     if (same) targetPath = undefined
   }
-  return targetPath ? { path, patch: { ...patch }, cover: job.cover, targetPath } : { path, patch: { ...patch }, cover: job.cover }
+  const next: WriteJob = { path, patch: { ...patch }, cover: job.cover }
+  if (rhythm) next.rhythm = rhythm
+  if (targetPath) next.targetPath = targetPath
+  return next
 }
 
 export function assertWriteJobs(value: unknown): WriteJob[] {

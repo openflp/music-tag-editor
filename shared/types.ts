@@ -140,11 +140,17 @@ export interface TrackSnapshot {
 
 export type TagPatch = Partial<TrackTags>
 
+export interface RhythmWrite {
+  bpm: number
+  initialKey: string
+}
+
 export interface WriteJob {
   path: string
   patch: TagPatch
   cover?: CoverArt | null
   targetPath?: string
+  rhythm?: RhythmWrite
 }
 
 export interface WriteResult {
@@ -209,6 +215,7 @@ export const IPC = {
   pickFolder: 'files:pick-folder',
   readTags: 'tags:read',
   readDetails: 'tags:details',
+  readRhythm: 'tags:rhythm',
   readCovers: 'tags:covers',
   trackBatch: 'tags:batch',
   writeTags: 'tags:write',
