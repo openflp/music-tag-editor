@@ -40,6 +40,9 @@
   --r-card: 16px;
   --r-panel: 22px;
   --r-pill: 999px;
+  /* кнопки: скруглённый квадрат вместо круга */
+  --r-btn: 10px;
+  --r-btn-sm: 7px;
   --text: #f5f5f7;
   --text-2: rgba(235, 235, 245, 0.81);
   --muted: rgba(235, 235, 245, 0.64);
@@ -1981,7 +1984,7 @@ label.menu-item { cursor: pointer; }
 .player-skip,
 .player-play,
 .player-aux {
-  border-radius: 999px;
+  border-radius: var(--r-btn);
 }
 
 .player-aux { width: 28px; height: 28px; }
@@ -3103,7 +3106,7 @@ label.menu-item { cursor: pointer; }
 .side-status-actions .icon-btn {
   width: 22px;
   height: 22px;
-  border-radius: 999px;
+  border-radius: var(--r-btn-sm);
 }
 
 .copy-swap { position: relative; }
@@ -4818,20 +4821,21 @@ label.menu-item { cursor: pointer; }
 
 /* ── заголовок окна ── */
 .title-search { border-radius: var(--r-pill); }
-.title-search-github { border-radius: var(--r-pill); }
+.title-search-github { border-radius: var(--r-btn-sm); }
 .mte-titlebar-menubar [data-slot="menubar-trigger"] { border-radius: 8px; }
-#mte-titlebar-settings-host .icon-btn { border-radius: var(--r-pill); }
+#mte-titlebar-settings-host .icon-btn { border-radius: var(--r-btn-sm); }
 
 /* ── кнопки ── */
 .icon-btn,
-.icon-check,
-.info-pane .icon-btn { border-radius: var(--r-pill); }
+.icon-check { border-radius: var(--r-btn); }
 
-.btn { border-radius: var(--r-pill); }
+.info-pane .icon-btn { border-radius: var(--r-btn-sm); }
+
+.btn { border-radius: var(--r-btn); }
 .chip { border-radius: var(--r-pill); }
 
-.seg .btn { border-radius: var(--r-pill) 0 0 var(--r-pill); }
-.seg-check { border-radius: 0 var(--r-pill) var(--r-pill) 0; }
+.seg .btn { border-radius: var(--r-btn) 0 0 var(--r-btn); }
+.seg-check { border-radius: 0 var(--r-btn) var(--r-btn) 0; }
 
 /* ── поля ввода ── */
 .fld,
@@ -5304,6 +5308,9 @@ kbd {
    ПЛЕЕР: бирюзовая заливка прогресса и громкости.
    Play, prev/next и ползунок остаются нейтральными.
    ════════════════════════════════════════════════════════════════ */
+/* play/stop — всегда круг; специфичность выше .icon-btn из темы, чтобы не перебивалось */
+.player .player-play { border-radius: 9999px; }
+
 .player-bar-fill { background: var(--accent); }
 
 /* кружок (ползунок) плеера тоже бирюзовый, в том числе при наведении */
@@ -5624,7 +5631,7 @@ kbd {
   height: 30px;
   padding: 0 16px;
   border: 1px solid var(--field-line, rgba(255, 255, 255, 0.14));
-  border-radius: 999px;
+  border-radius: var(--r-btn, 10px);
   background: var(--card, #242424);
   color: var(--text, #f5f5f7);
   font: inherit;
@@ -5701,6 +5708,12 @@ kbd {
   [cmdk-item][data-selected="true"],
   .hist-menu [data-slot="command-item"][data-selected="true"],
   .command-glass [cmdk-item][data-selected="true"],
+  .command-glass .cmd-row[data-selected="true"],
+  [data-slot="select-item"][data-highlighted],
+  [data-slot="dropdown-menu-radio-item"]:is(:focus, [data-highlighted]),
+  [data-slot="context-menu-checkbox-item"]:is(:focus, [data-highlighted]),
+  [data-slot="context-menu-radio-item"]:is(:focus, [data-highlighted]),
+  [data-slot="context-menu-sub-trigger"]:is(:focus, [data-highlighted], [data-state="open"]),
   .track-row.selected
 ) :is(kbd, [data-slot="kbd"], .menu-kbd) {
   color: var(--on-accent);
@@ -6066,7 +6079,7 @@ kbd {
   padding: 0;
   color: var(--muted);
   background: transparent;
-  border-radius: var(--r-pill);
+  border-radius: var(--r-btn-sm);
 }
 
 .ask-dialog [data-slot="dialog-close"] svg { width: 14px; height: 14px; }
