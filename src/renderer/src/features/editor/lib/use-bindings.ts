@@ -14,12 +14,54 @@ export function useEditorBindings(): void {
     const stopClose = api.onCloseQuery(() => useEditor.getState().requestClose())
     const stopMenu = api.onMenu((command) => {
       const state = useEditor.getState()
-      if (command === 'open') void state.openDialog()
-      if (command === 'save') state.requestSave()
-      if (command === 'undo') state.undoOnce()
-      if (command === 'redo') state.redoOnce()
-      if (command === 'prev') state.selectDelta(-1)
-      if (command === 'next') state.selectDelta(1)
+      switch (command) {
+        case 'open':
+          void state.openDialog()
+          break
+        case 'folder':
+          void state.openFolder()
+          break
+        case 'save':
+          state.requestSave()
+          break
+        case 'undo':
+          state.undoOnce()
+          break
+        case 'redo':
+          state.redoOnce()
+          break
+        case 'prev':
+          state.selectDelta(-1)
+          break
+        case 'next':
+          state.selectDelta(1)
+          break
+        case 'refresh':
+          void state.refresh()
+          break
+        case 'remove':
+          state.removeSelected()
+          break
+        case 'clear':
+          state.requestClear()
+          break
+        case 'reveal':
+          void state.revealCurrent()
+          break
+        case 'openFile':
+          void state.openCurrent()
+          break
+        case 'settings':
+          window.dispatchEvent(new CustomEvent('mte-open-settings', { detail: 'language' }))
+          break
+        case 'palette':
+        case 'toggleSidebar':
+        case 'togglePlayer':
+          window.dispatchEvent(new CustomEvent('mte-command', { detail: command }))
+          break
+        default:
+          if (command.startsWith('tab:')) window.dispatchEvent(new CustomEvent('mte-sheet-tab', { detail: command.slice(4) }))
+      }
     })
     return () => {
       stopProgress()
@@ -52,6 +94,14 @@ export function useEditorBindings(): void {
         return
       }
       if (shortcutMatches('selectAll', event)) {
+        // есть выделенный мышью текст в «Информации»: Ctrl+A выделяет весь текст таблицы, а не все треки
+        const selection = window.getSelection()
+        const table = selection && !selection.isCollapsed ? selection.anchorNode?.parentElement?.closest('.info-pane .prop-table') : null
+        if (selection && table) {
+          event.preventDefault()
+          selection.selectAllChildren(table)
+          return
+        }
         event.preventDefault()
         useEditor.getState().selectAll()
         return

@@ -1,12 +1,13 @@
 import { useSyncExternalStore } from 'react'
+import { isMac } from '@/shared/lib/platform'
 
 export const SHORTCUTS = [
   { id: 'open', def: 'Ctrl+O' },
   { id: 'folder', def: 'Ctrl+Shift+O' },
   { id: 'save', def: 'Ctrl+S' },
   { id: 'undo', def: 'Ctrl+Z' },
-  { id: 'redo', def: 'Ctrl+Y' },
-  { id: 'redoAlt', def: 'Ctrl+Shift+Z' },
+  { id: 'redo', def: isMac ? 'Ctrl+Shift+Z' : 'Ctrl+Y' },
+  { id: 'redoAlt', def: isMac ? 'Ctrl+Y' : 'Ctrl+Shift+Z' },
   { id: 'palette', def: 'Ctrl+K' },
   { id: 'settings', def: 'Ctrl+,' },
   { id: 'nextTab', def: 'Ctrl+Tab' },
@@ -18,7 +19,7 @@ export const SHORTCUTS = [
   { id: 'tabFile', def: 'Ctrl+4' },
   { id: 'selectAll', def: 'Ctrl+A' },
   { id: 'copyFiles', def: 'Ctrl+C' },
-  { id: 'remove', def: 'Delete' }
+  { id: 'remove', def: isMac ? 'Ctrl+Backspace' : 'Delete' }
 ] as const
 
 export type ShortcutId = (typeof SHORTCUTS)[number]['id']
@@ -37,6 +38,7 @@ interface Prefs {
   confirmWrite: boolean
   confirmClose: boolean
   confirmReset: boolean
+  confirmClearLoad: boolean
   rememberVolume: boolean
   volume: number
   showFormatBadges: boolean
@@ -56,6 +58,7 @@ function empty(): Prefs {
     confirmWrite: true,
     confirmClose: true,
     confirmReset: true,
+    confirmClearLoad: true,
     rememberVolume: true,
     volume: 80,
     showFormatBadges: true
@@ -82,6 +85,7 @@ function read(): Prefs {
       confirmWrite: flag(parsed.confirmWrite, true),
       confirmClose: flag(parsed.confirmClose, true),
       confirmReset: flag(parsed.confirmReset, true),
+      confirmClearLoad: flag(parsed.confirmClearLoad, true),
       rememberVolume: flag(parsed.rememberVolume, true),
       volume: clamp(parsed.volume, 0, 100, 80),
       showFormatBadges: flag(parsed.showFormatBadges, true)
@@ -144,26 +148,81 @@ export function useShortcut(id: ShortcutId): string {
   return shortcutOf(id)
 }
 
-export function electronAccelerator(chord: string): string {
-  if (!chord) return ''
-  return chord.replace('Ctrl+', 'CmdOrCtrl+')
+const ELECTRON_KEYS: Record<string, string> = {
+  ArrowUp: 'Up',
+  ArrowDown: 'Down',
+  ArrowLeft: 'Left',
+  ArrowRight: 'Right'
 }
 
+// Ключи, которые main (assertAccelerator) принимает; остальное в нативное меню не отдаём.
+const NATIVE_KEY = /^([A-Z0-9]|Delete|Backspace|Space|Home|End|Up|Down|Left|Right|F([1-9]|1[0-2]))$/
+
+export function electronAccelerator(chord: string): string {
+  if (!chord) return ''
+  const parts = chord.split('+')
+  const key = parts.pop() ?? ''
+  const native = ELECTRON_KEYS[key] ?? key
+  if (!NATIVE_KEY.test(native)) return ''
+  const mods = parts.map((part) => (part === 'Ctrl' ? 'CmdOrCtrl' : part))
+  return [...mods, native].join('+')
+}
+
+// Буква/цифра берётся из event.key, пока это ASCII (учитывает Dvorak/AZERTY).
+// На не-латинской раскладке (ru) и при Option на macOS event.key даёт другой символ,
+// тогда используем физический код клавиши.
+function keyName(event: KeyboardEvent): string {
+  if (/^[a-z0-9]$/i.test(event.key)) return event.key.toUpperCase()
+  if (/^Key[A-Z]$/.test(event.code)) return event.code.slice(3)
+  if (/^Digit[0-9]$/.test(event.code)) return event.code.slice(5)
+  if (event.key === ' ') return 'Space'
+  return event.key.length === 1 ? event.key.toUpperCase() : event.key
+}
+
+// «Ctrl» в хордах = основной модификатор платформы: Cmd на macOS, Ctrl в остальных.
 export function chordFromEvent(event: KeyboardEvent): string {
   if (event.key === 'Escape') return ''
+  if (['Control', 'Shift', 'Alt', 'Meta'].includes(event.key)) return ''
+  // физический Ctrl на macOS — это emacs-привязки в полях ввода, не шорткат приложения
+  if (isMac && event.ctrlKey && !event.metaKey) return ''
   const parts: string[] = []
-  if (event.ctrlKey || event.metaKey) parts.push('Ctrl')
+  if (isMac ? event.metaKey : event.ctrlKey) parts.push('Ctrl')
   if (event.altKey) parts.push('Alt')
   if (event.shiftKey) parts.push('Shift')
-  if (['Control', 'Shift', 'Alt', 'Meta'].includes(event.key)) return ''
-  const key = event.key.length === 1 ? event.key.toUpperCase() : event.key
-  parts.push(key)
+  parts.push(keyName(event))
   return parts.join('+')
 }
 
 export function shortcutMatches(id: ShortcutId, event: KeyboardEvent): boolean {
   const chord = shortcutOf(id)
   return Boolean(chord) && chordFromEvent(event) === chord
+}
+
+const MAC_KEYS: Record<string, string> = {
+  Delete: '⌦',
+  Backspace: '⌫',
+  ArrowUp: '↑',
+  ArrowDown: '↓',
+  ArrowLeft: '←',
+  ArrowRight: '→',
+  Tab: '⇥',
+  Enter: '↩'
+}
+
+/** Для показа пользователю: на macOS ⌥⇧⌘K, иначе как есть. */
+export function formatChord(chord: string): string {
+  if (!chord || !isMac) return chord
+  const parts = chord.split('+')
+  const key = parts.pop() ?? ''
+  return `${parts.includes('Alt') ? '⌥' : ''}${parts.includes('Shift') ? '⇧' : ''}${parts.includes('Ctrl') ? '⌘' : ''}${MAC_KEYS[key] ?? key}`
+}
+
+/** Для aria-keyshortcuts. */
+export function ariaChord(chord: string): string {
+  return chord
+    .split('+')
+    .map((part) => (part === 'Ctrl' ? (isMac ? 'Meta' : 'Control') : part))
+    .join('+')
 }
 
 export function setShortcut(id: ShortcutId, chord: string): void {
@@ -199,6 +258,10 @@ export function setConfirmClose(on: boolean): void {
 
 export function setConfirmReset(on: boolean): void {
   write({ ...current, confirmReset: on })
+}
+
+export function setConfirmClearLoad(on: boolean): void {
+  write({ ...current, confirmClearLoad: on })
 }
 
 export function setRememberVolume(on: boolean): void {

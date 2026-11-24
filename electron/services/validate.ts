@@ -75,7 +75,7 @@ export function assertPathList(value: unknown): string[] {
   return value.map((item) => assertStringPath(item))
 }
 
-const ACCELERATOR = /^(CmdOrCtrl\+)?(Alt\+)?(Shift\+)?([A-Z0-9]|Delete|Home|End|ArrowUp|ArrowDown|F([1-9]|1[0-2]))$/
+const ACCELERATOR = /^(CmdOrCtrl\+)?(Alt\+)?(Shift\+)?([A-Z0-9]|Delete|Backspace|Space|Home|End|Up|Down|Left|Right|F([1-9]|1[0-2]))$/
 
 const APP_FLAGS = ['hardwareAcceleration', 'backgroundThrottling', 'spellcheck', 'openAtLogin', 'alwaysOnTop', 'restoreBounds'] as const
 

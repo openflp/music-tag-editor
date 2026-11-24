@@ -43,6 +43,7 @@ import {
   IconPhoto,
   IconPlayerPauseFilled,
   IconPlayerPlayFilled,
+  IconPlayerStopFilled,
   IconPlayerSkipBackFilled,
   IconPlayerSkipForwardFilled,
   IconPlus,
@@ -137,6 +138,17 @@ export const VolumeIcon = icon(IconVolume)
 export const VolumeOffIcon = icon(IconVolumeOff)
 export const PlayIcon = icon(IconPlayerPlayFilled, 16, 0)
 export const PauseIcon = icon(IconPlayerPauseFilled, 16, 0)
+export const StopIcon = icon(IconPlayerStopFilled, 16, 0)
+
+/** Обновление и стоп лежат друг на друге и перетекают, а не сменяются кадром. */
+export function RefreshStopIcon({ stop }: { stop: boolean }) {
+  return (
+    <span className={stop ? 'icon-swap is-stop' : 'icon-swap'}>
+      <RefreshIcon />
+      <StopIcon />
+    </span>
+  )
+}
 export const ShuffleIcon = icon(IconArrowsShuffle)
 export const RepeatIcon = icon(IconRepeat)
 export const RepeatOneIcon = icon(IconRepeatOnce)

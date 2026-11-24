@@ -9,6 +9,8 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { editHitFrom, type EditActions } from '@/shared/lib/edit-actions'
 import { useI18n } from '@/shared/i18n'
+import { formatChord, shortcutOf } from '@/features/settings/prefs'
+import { isMac } from '@/shared/lib/platform'
 import { CopyIcon, CutIcon, PasteIcon, RedoIcon, SelectAllIcon, TrashIcon, UndoIcon } from '@/shared/ui/icons'
 
 type MenuState = { x: number; y: number; actions: EditActions }
@@ -108,17 +110,17 @@ export function EditMenu() {
           run?.()
         }}
       >
-        <Item label={pack.undo} shortcut="Ctrl+Z" icon={<UndoIcon />} disabled={!actions?.canUndo} onSelect={later(actions ? () => actions.undo() : undefined)} />
-        <Item label={pack.redo} shortcut="Ctrl+Y" icon={<RedoIcon />} disabled={!actions?.canRedo} onSelect={later(actions ? () => actions.redo() : undefined)} />
+        <Item label={pack.undo} shortcut={formatChord(shortcutOf('undo'))} icon={<UndoIcon />} disabled={!actions?.canUndo} onSelect={later(actions ? () => actions.undo() : undefined)} />
+        <Item label={pack.redo} shortcut={formatChord(shortcutOf('redo'))} icon={<RedoIcon />} disabled={!actions?.canRedo} onSelect={later(actions ? () => actions.redo() : undefined)} />
         <DropdownMenuSeparator />
-        <Item label={pack.cut} shortcut="Ctrl+X" icon={<CutIcon />} disabled={!actions?.canCut} onSelect={later(actions ? () => actions.cut() : undefined)} />
-        <Item label={pack.clipboardCopy} shortcut="Ctrl+C" icon={<CopyIcon />} disabled={!actions?.canCopy} onSelect={later(actions ? () => actions.copy() : undefined)} />
-        <Item label={pack.paste} shortcut="Ctrl+V" icon={<PasteIcon />} disabled={!actions?.canPaste} onSelect={later(actions ? () => actions.paste() : undefined)} />
-        <Item label={pack.remove} shortcut="Del" icon={<TrashIcon />} disabled={!actions?.canRemove} onSelect={later(actions ? () => actions.remove() : undefined)} />
+        <Item label={pack.cut} shortcut={formatChord('Ctrl+X')} icon={<CutIcon />} disabled={!actions?.canCut} onSelect={later(actions ? () => actions.cut() : undefined)} />
+        <Item label={pack.clipboardCopy} shortcut={formatChord('Ctrl+C')} icon={<CopyIcon />} disabled={!actions?.canCopy} onSelect={later(actions ? () => actions.copy() : undefined)} />
+        <Item label={pack.paste} shortcut={formatChord('Ctrl+V')} icon={<PasteIcon />} disabled={!actions?.canPaste} onSelect={later(actions ? () => actions.paste() : undefined)} />
+        <Item label={pack.remove} shortcut={isMac ? '⌦' : 'Del'} icon={<TrashIcon />} disabled={!actions?.canRemove} onSelect={later(actions ? () => actions.remove() : undefined)} />
         <DropdownMenuSeparator />
         <Item
           label={pack.selectAll}
-          shortcut="Ctrl+A"
+          shortcut={formatChord('Ctrl+A')}
           icon={<SelectAllIcon />}
           disabled={!actions?.canSelectAll}
           onSelect={later(actions ? () => actions.selectAll() : undefined)}

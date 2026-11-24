@@ -13,6 +13,7 @@ const FLUSH_MS = 100
 
 export interface ReadOptions {
   lite?: boolean
+  cancelled?: () => boolean
 }
 
 function breathe(): Promise<void> {
@@ -21,7 +22,14 @@ function breathe(): Promise<void> {
 
 async function walk(dir: string, depth: number, push: (filePath: string) => Promise<void>, limit: () => boolean): Promise<void> {
   if (depth > MAX_DEPTH || limit()) return
-  const entries = await readdir(dir, { withFileTypes: true })
+  let entries
+  try {
+    entries = await readdir(dir, { withFileTypes: true })
+  } catch (error) {
+    // корневую папку ошибка касается целиком, во вложенных (нет доступа) просто пропускаем
+    if (depth === 0) throw error
+    return
+  }
   const files: string[] = []
   const dirs: string[] = []
   for (const entry of entries) {
@@ -59,7 +67,10 @@ export async function readTracks(
     await breathe()
   }
 
+  const stop = () => snapshots.length >= MAX_FILES || options.cancelled?.() === true
+
   const pushFile = async (filePath: string) => {
+    if (stop()) return
     const key = process.platform === 'linux' ? filePath : filePath.toLowerCase()
     if (seen.has(key) || snapshots.length >= MAX_FILES) return
     seen.add(key)
@@ -70,12 +81,12 @@ export async function readTracks(
   }
 
   for (const input of inputs) {
-    if (snapshots.length >= MAX_FILES) break
+    if (stop()) break
     try {
       const resolved = await realpath(input)
       const info = await stat(resolved)
       if (info.isDirectory()) {
-        await walk(resolved, 0, pushFile, () => snapshots.length >= MAX_FILES)
+        await walk(resolved, 0, pushFile, stop)
         continue
       }
       if (!info.isFile()) continue
@@ -111,6 +122,6 @@ export async function readTracks(
     }
   }
 
-  await flush()
+  if (!options.cancelled?.()) await flush()
   return snapshots
 }

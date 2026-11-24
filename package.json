@@ -3,7 +3,7 @@
   "productName": "Music Tag Editor",
   "version": "0.1.0",
   "description": "Desktop editor for music file tags and cover art",
-  "author": "Music Tag Editor",
+  "author": "OpenFLP",
   "license": "MIT",
   "main": "./out/main/index.js",
   "type": "module",

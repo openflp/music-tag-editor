@@ -110,7 +110,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
   const select = useEditor((state) => state.select)
   const openDialog = useEditor((state) => state.openDialog)
   const saveAll = useEditor((state) => state.requestSave)
-  const clear = useEditor((state) => state.clear)
+  const requestClear = useEditor((state) => state.requestClear)
   const loading = useEditor((state) => (active ? state.loading : false))
   const [tab, setTab] = useState<PaletteTab>('all')
   const [query, setQuery] = useState('')
@@ -141,9 +141,9 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
     () => [
       { id: 'open', label: pack.openFiles, shortcut: openKey, icon: <FolderIcon />, run: () => void openDialog() },
       { id: 'save', label: pack.writeTags, shortcut: saveKey, icon: <DownloadIcon />, run: () => saveAll() },
-      { id: 'clear', label: pack.clearList, shortcut: '', icon: <TrashIcon />, run: clear }
+      { id: 'clear', label: pack.clearList, shortcut: '', icon: <TrashIcon />, run: requestClear }
     ],
-    [openDialog, saveAll, clear, pack.openFiles, pack.writeTags, pack.clearList, openKey, saveKey]
+    [openDialog, saveAll, requestClear, pack.openFiles, pack.writeTags, pack.clearList, openKey, saveKey]
   )
 
   // Строка поиска собирается вместе с пачкой, а не на каждый символ.

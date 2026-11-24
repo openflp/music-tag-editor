@@ -10,6 +10,9 @@ import { createRoot } from 'react-dom/client'
 import { App } from './app/App'
 import { CrashBoundary } from './app/CrashScreen'
 
+// до первого кадра: CSS и TitleBar различают платформы по этому атрибуту
+document.documentElement.dataset.platform = window.musicTagEditor?.platform ?? ''
+
 const root = document.getElementById('root')
 if (!root) throw new Error('Не найден корневой элемент')
 

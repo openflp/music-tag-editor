@@ -16,7 +16,7 @@ import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, Command
 import { Hint } from '@/components/ui/tooltip'
 import { AxisScroll } from '@/shared/ui/axis-scroll'
 import { FadeText } from '@/shared/ui/fade-text'
-import { CheckIcon, ChevronDownIcon, CloseIcon, CopyIcon, FileIcon, FolderOutIcon, MoreIcon, RedoIcon, RestoreIcon, TrashIcon, UndoIcon } from '@/shared/ui/icons'
+import { CheckIcon, ChevronDownIcon, CloseIcon, CopyIcon, FileIcon, FolderOutIcon, MoreIcon, RedoIcon, RestoreIcon, SearchIcon, TrashIcon, UndoIcon } from '@/shared/ui/icons'
 import { fileWord, tr, useI18n } from '@/shared/i18n'
 
 function ErrorScroll({ watch, children }: { watch: number; children: ReactNode }) {
@@ -703,12 +703,16 @@ export function SaveDialogs() {
   const preview = useEditor((state) => state.savePreview)
   const resetAsk = useEditor((state) => state.resetAsk)
   const closeAsk = useEditor((state) => state.closeAsk)
+  const clearAsk = useEditor((state) => state.clearAsk)
   const confirmSave = useEditor((state) => state.confirmSave)
   const dismissSave = useEditor((state) => state.dismissSave)
   const confirmReset = useEditor((state) => state.confirmReset)
   const dismissReset = useEditor((state) => state.dismissReset)
   const confirmClose = useEditor((state) => state.confirmClose)
   const dismissClose = useEditor((state) => state.dismissClose)
+  const confirmClear = useEditor((state) => state.confirmClear)
+  const dismissClear = useEditor((state) => state.dismissClear)
+  const [skipClearAsk, setSkipClearAsk] = useState(false)
   const saving = useEditor((state) => state.saving)
   const count = preview?.length ?? 0
   const filesLabel = fileWord(count, pack)
@@ -743,6 +747,45 @@ export function SaveDialogs() {
           </div>
         </DialogContent>
       </Dialog>
+      <Dialog
+        open={clearAsk}
+        onOpenChange={(open) => {
+          if (open) return
+          setSkipClearAsk(false)
+          dismissClear()
+        }}
+      >
+        <DialogContent className="ask-dialog" data-no-track-nav="">
+          <DialogTitle>{pack.askClearTitle}</DialogTitle>
+          <DialogDescription>{pack.askClearBody}</DialogDescription>
+          <label className="ask-skip">
+            <input type="checkbox" checked={skipClearAsk} onChange={(event) => setSkipClearAsk(event.target.checked)} />
+            {pack.askClearSkip}
+          </label>
+          <div className="ask-actions">
+            <button
+              type="button"
+              className="btn"
+              onClick={() => {
+                setSkipClearAsk(false)
+                dismissClear()
+              }}
+            >
+              {pack.cancel}
+            </button>
+            <button
+              type="button"
+              className="btn primary"
+              onClick={() => {
+                confirmClear(skipClearAsk)
+                setSkipClearAsk(false)
+              }}
+            >
+              {pack.clear}
+            </button>
+          </div>
+        </DialogContent>
+      </Dialog>
       <Dialog open={closeAsk} onOpenChange={(open) => { if (!open) dismissClose() }}>
         <DialogContent className="ask-dialog" data-no-track-nav="">
           <DialogTitle>{pack.askCloseTitle}</DialogTitle>
@@ -758,10 +801,7 @@ export function SaveDialogs() {
           <DialogTitle>{pack.askSaveTitle(count, filesLabel)}</DialogTitle>
           <DialogDescription>{pack.askSaveBody}</DialogDescription>
           <div className="save-search">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <circle cx="11" cy="11" r="7" />
-              <path d="m20 20-3.5-3.5" />
-            </svg>
+            <SearchIcon />
             <input
               type="text"
               value={query}

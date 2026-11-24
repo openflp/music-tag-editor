@@ -90,6 +90,18 @@ export function App() {
     return () => window.removeEventListener('keydown', onKey)
   }, [])
 
+  // команды нативного меню (macOS), которые меняют локальное состояние App
+  useEffect(() => {
+    const onCommand = (event: Event) => {
+      const detail = event instanceof CustomEvent ? event.detail : null
+      if (detail === 'palette') setPalette((open) => !open)
+      if (detail === 'toggleSidebar') setSidebarOpen((open) => !open)
+      if (detail === 'togglePlayer') setPlayerOpen((open) => !open)
+    }
+    window.addEventListener('mte-command', onCommand)
+    return () => window.removeEventListener('mte-command', onCommand)
+  }, [])
+
   useEffect(() => {
     const hide = () => {
       setDropMode(null)

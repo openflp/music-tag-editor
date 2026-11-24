@@ -1,21 +1,83 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { baseName, formatBadge, formatBitrate, formatBytes, formatDuration, formatRate, formatStamp } from '@/entities/track/lib'
 import { useEditor, type TrackVm } from '@/features/editor/model/store'
 import { displayKey } from '@shared/analysis'
 import { camelotOf } from '@shared/key'
 import type { Pack } from '@shared/i18n'
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from '@/components/ui/context-menu'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Hint } from '@/components/ui/tooltip'
+import { IconGripVertical } from '@tabler/icons-react'
 import { AxisScroll } from '@/shared/ui/axis-scroll'
-import { CheckIcon, CopyIcon, DownloadIcon, FileIcon, FolderIcon, FolderOutIcon, OpenExternalIcon } from '@/shared/ui/icons'
+import { CheckIcon, ChevronRightIcon, CopyIcon, DownloadIcon, FileIcon, FolderOutIcon, MoreIcon } from '@/shared/ui/icons'
 import { useAudioAnalysis } from '@/features/analysis/use-audio-analysis'
 import { getPack, menuLocaleOf, useI18n } from '@/shared/i18n'
 
+const INFO_SECTIONS = ['file', 'audio', 'rhythm', 'tags'] as const
+
+type InfoSectionId = (typeof INFO_SECTIONS)[number]
+
 interface InfoRow {
+  id: string // уникален в пределах таблицы (label может повторяться: TIT2 и TITLE и т. п.)
+  section: InfoSectionId
   label: string
   value: string
   copy: string
   slow?: boolean
+}
+
+// TODO: перенести в языковые паки (@shared/i18n): infoExpandSection, infoCollapseSection, infoExpandAll, infoCollapseAll
+const SECTION_TEXT = {
+  ru: { expand: 'Развернуть пункт', collapse: 'Свернуть пункт', expandAll: 'Развернуть все пункты', collapseAll: 'Свернуть все пункты' },
+  en: { expand: 'Expand section', collapse: 'Collapse section', expandAll: 'Expand all sections', collapseAll: 'Collapse all sections' }
+} as const
+
+const ORDER_KEY = 'mte.info.order'
+const CLOSED_KEY = 'mte.info.closed'
+// Свой MIME, а не text/plain: иначе при отпускании над полем ввода туда вставился бы id раздела,
+// а App.dropInfo по пустому/чужому набору types не примет перетаскивание за файловое.
+const DRAG_MIME = 'application/x-mte-info-section'
+
+function store(key: string, value: unknown): void {
+  try {
+    localStorage.setItem(key, JSON.stringify(value))
+  } catch {
+    /* storage can be unavailable */
+  }
+}
+
+function isSection(value: unknown): value is InfoSectionId {
+  return value === 'file' || value === 'audio' || value === 'rhythm' || value === 'tags'
+}
+
+function readOrder(): InfoSectionId[] {
+  try {
+    const raw = JSON.parse(localStorage.getItem(ORDER_KEY) || '')
+    if (!Array.isArray(raw)) return [...INFO_SECTIONS]
+    const known = raw.filter(isSection)
+    return [...known, ...INFO_SECTIONS.filter((id) => !known.includes(id))]
+  } catch {
+    return [...INFO_SECTIONS]
+  }
+}
+
+function readClosed(): InfoSectionId[] {
+  try {
+    const raw = JSON.parse(localStorage.getItem(CLOSED_KEY) || '[]')
+    return Array.isArray(raw) ? raw.filter(isSection) : []
+  } catch {
+    return []
+  }
+}
+
+function moveSection(list: InfoSectionId[], from: InfoSectionId, to: InfoSectionId): InfoSectionId[] {
+  const fromIndex = list.indexOf(from)
+  const toIndex = list.indexOf(to)
+  if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) return list
+  const next = list.slice()
+  next.splice(fromIndex, 1)
+  next.splice(toIndex, 0, from)
+  return next
 }
 
 function uniform(values: string[]): string {
@@ -232,34 +294,38 @@ function rowsOf(tracks: TrackVm[], locale: string): InfoRow[] {
   const pack = getPack()
   const one = tracks.length === 1 ? tracks[0] : null
   const cell = (read: (track: TrackVm) => string) => uniform(tracks.map(read))
-  const row = (label: string, value: string, copy = value, slow = false): InfoRow => ({ label, value, copy, slow })
+  const row = (section: InfoSectionId, label: string, value: string, copy = value, slow = false): InfoRow => ({ id: '', section, label, value, copy, slow })
   const sameText = (left: string, right: string) => left.trim().toLowerCase() === right.trim().toLowerCase()
   const codec = cell((track) => track.tech.codec ?? '')
   const container = cell((track) => track.tech.container ?? '')
-  const always: InfoRow[] = [
-    row(pack.infoName, cell((track) => baseName(track.path))),
+  const file: InfoRow[] = [
+    row('file', pack.infoName, cell((track) => baseName(track.path))),
     one
-      ? row(pack.infoPath, one.path)
-      : row(pack.infoFiles, String(tracks.length), tracks.map((track) => track.path).join('\n')),
-    row(pack.infoSize, cell((track) => (track.tech.size ? formatBytes(track.tech.size) : ''))),
-    row(pack.infoCreated, cell((track) => formatStamp(track.tech.createdMs, locale))),
-    row(pack.infoModified, cell((track) => formatStamp(track.tech.modifiedMs, locale))),
-    row(pack.infoFormat, cell((track) => formatBadge(track.format))),
-    row(pack.infoContainer, sameText(container, codec) ? '' : container),
-    row(pack.infoCodec, codec),
-    row(pack.infoDuration, cell((track) => formatDuration(track.tech.durationMs))),
-    row(pack.infoBitrate, cell((track) => formatBitrate(track.tech.bitrate))),
-    row(pack.infoRate, cell((track) => formatRate(track.tech.sampleRate))),
-    row(pack.infoChannels, cell(channels)),
-    row(pack.infoBits, cell((track) => (track.tech.bitsPerSample ? `${track.tech.bitsPerSample} ${pack.bits}` : ''))),
-    row(pack.infoLossless, cell((track) => (track.tech.codec || track.format ? (track.tech.lossless ? pack.yes : pack.no) : ''))),
-    row(pack.infoTagTypes, cell((track) => track.tech.tagTypes ?? '')),
-    row(pack.infoEncoder, cell(encoderOf))
+      ? row('file', pack.infoPath, one.path)
+      : row('file', pack.infoFiles, String(tracks.length), tracks.map((track) => track.path).join('\n')),
+    row('file', pack.infoSize, cell((track) => (track.tech.size ? formatBytes(track.tech.size) : ''))),
+    row('file', pack.infoCreated, cell((track) => formatStamp(track.tech.createdMs, locale))),
+    row('file', pack.infoModified, cell((track) => formatStamp(track.tech.modifiedMs, locale)))
   ]
+  const audio: InfoRow[] = [
+    row('audio', pack.infoFormat, cell((track) => formatBadge(track.format))),
+    row('audio', pack.infoContainer, sameText(container, codec) ? '' : container),
+    row('audio', pack.infoCodec, codec),
+    row('audio', pack.infoDuration, cell((track) => formatDuration(track.tech.durationMs))),
+    row('audio', pack.infoBitrate, cell((track) => formatBitrate(track.tech.bitrate))),
+    row('audio', pack.infoRate, cell((track) => formatRate(track.tech.sampleRate))),
+    row('audio', pack.infoChannels, cell(channels)),
+    row('audio', pack.infoBits, cell((track) => (track.tech.bitsPerSample ? `${track.tech.bitsPerSample} ${pack.bits}` : ''))),
+    row('audio', pack.infoLossless, cell((track) => (track.tech.codec || track.format ? (track.tech.lossless ? pack.yes : pack.no) : '')))
+  ].filter((item) => item.label !== pack.infoContainer || item.value)
   const rhythm: InfoRow[] = [
-    row('BPM', cell(bpmOf), cell(bpmOf), true),
-    row(pack.infoKey, cell(keyOf), cell(keyOf), true),
-    row('Camelot', cell((track) => camelotOf(keyOf(track))), cell((track) => camelotOf(keyOf(track))), true)
+    row('rhythm', 'BPM', cell(bpmOf), cell(bpmOf), true),
+    row('rhythm', pack.infoKey, cell(keyOf), cell(keyOf), true),
+    row('rhythm', 'Camelot', cell((track) => camelotOf(keyOf(track))), cell((track) => camelotOf(keyOf(track))), true)
+  ]
+  const tagHead: InfoRow[] = [
+    row('tags', pack.infoTagTypes, cell((track) => track.tech.tagTypes ?? '')),
+    row('tags', pack.infoEncoder, cell(encoderOf))
   ]
   const keys: string[] = []
   for (const track of tracks) {
@@ -274,10 +340,10 @@ function rowsOf(tracks: TrackVm[], locale: string): InfoRow[] {
     .map((key) => {
       const copy = cell((track) => track.tech.facts?.find((fact) => fact.key === key)?.value ?? '')
       const label = factLabel(key, pack)
-      return row(label, shownFact(key, copy, pack), copy)
+      return row('tags', label, shownFact(key, copy, pack), copy)
     })
     .filter((item) => item.copy && item.copy !== pack.mixedShort)
-  const summary = always.filter((item) => item.label !== pack.infoContainer || item.value)
+  const summary = [...file, ...audio, ...rhythm, ...tagHead]
   const seen = new Set(summary.filter((item) => item.value).map((item) => `${item.label}\n${item.copy}`))
   const extra = tags.filter((item) => {
     const signature = `${item.label}\n${item.copy}`
@@ -286,7 +352,15 @@ function rowsOf(tracks: TrackVm[], locale: string): InfoRow[] {
     return true
   })
   const collator = new Intl.Collator(locale, { sensitivity: 'base', numeric: true })
-  return [...rhythm, ...summary, ...extra].sort((left, right) => collator.compare(left.label, right.label))
+  extra.sort((left, right) => collator.compare(left.label, right.label))
+  const all = [...file, ...audio, ...rhythm, ...tagHead, ...extra]
+  const seenIds = new Map<string, number>()
+  return all.map((item) => {
+    const base = `${item.section}:${item.label}`
+    const n = seenIds.get(base) ?? 0
+    seenIds.set(base, n + 1)
+    return { ...item, id: n ? `${base}#${n}` : base }
+  })
 }
 
 function report(items: InfoRow[]): string {
@@ -347,13 +421,60 @@ export function InfoPane({ tracks }: { tracks: TrackVm[] }) {
   }, [pendingKey, loadDetails])
   const single = tracks.length === 1
   const analysis = useAudioAnalysis(single ? tracks[0].path : null)
-  const [rowIndex, setRowIndex] = useState<number | null>(null)
+  const [rowKey, setRowKey] = useState<string | null>(null)
+  // раздел, на котором открыли контекстное меню (null — клик мимо разделов)
+  const [ctxSection, setCtxSection] = useState<InfoSectionId | null>(null)
+  const [order, setOrder] = useState(readOrder)
+  const [closed, setClosed] = useState(readClosed)
+  const [dragId, setDragId] = useState<InfoSectionId | null>(null)
+  const [overId, setOverId] = useState<InfoSectionId | null>(null)
   const items = useMemo(() => rowsOf(tracks, menuLocaleOf(locale)), [tracks, locale])
-  const text = report(items)
-  const row = rowIndex === null ? null : items[rowIndex] ?? null
+  const sections = useMemo(() => {
+    const grouped = new Map<InfoSectionId, InfoRow[]>(INFO_SECTIONS.map((id) => [id, []]))
+    for (const item of items) grouped.get(item.section)?.push(item)
+    return order.map((id) => ({ id, rows: grouped.get(id) ?? [] }))
+  }, [items, order])
+  const text = report(sections.flatMap((section) => section.rows))
+  const row = rowKey === null ? null : items.find((item) => item.id === rowKey) ?? null
+  const titles: Record<InfoSectionId, string> = {
+    file: pack.infoSectionFile,
+    audio: pack.infoSectionAudio,
+    rhythm: pack.infoSectionRhythm,
+    tags: pack.infoSectionTags
+  }
+  useEffect(() => {
+    store(ORDER_KEY, order)
+  }, [order])
+  useEffect(() => {
+    store(CLOSED_KEY, closed)
+  }, [closed])
+  // после перестановки с клавиатуры DOM-узел раздела переезжает и теряет фокус: возвращаем его на ручку
+  const refocus = useRef<InfoSectionId | null>(null)
+  useLayoutEffect(() => {
+    const id = refocus.current
+    if (!id) return
+    refocus.current = null
+    document.querySelector<HTMLElement>(`[data-info-grip="${id}"]`)?.focus()
+  }, [order])
+  const place = (from: InfoSectionId, to: InfoSectionId) => {
+    setOrder((current) => moveSection(current, from, to))
+  }
+  const toggle = (id: InfoSectionId) => {
+    setClosed((current) => (current.includes(id) ? current.filter((item) => item !== id) : [...current, id]))
+  }
+  const label = SECTION_TEXT[String(menuLocaleOf(locale)).toLowerCase().startsWith('en') ? 'en' : 'ru']
+  const ctxOpen = ctxSection !== null && !closed.includes(ctxSection)
+  const expandAll = () => setClosed([])
+  const collapseAll = () => setClosed([...INFO_SECTIONS])
   const rowPending = Boolean(row?.slow && analysis.loading)
   const copyText = (value: string) => {
     void navigator.clipboard.writeText(value).catch(() => notify({ kind: 'err', text: pack.copyFail }))
+  }
+  const copyAll = () => {
+    void navigator.clipboard
+      .writeText(text)
+      .then(() => notify({ kind: 'ok', text: pack.copied }))
+      .catch(() => notify({ kind: 'err', text: pack.copyFail }))
   }
   const exportInfo = () => {
     const name = `${baseName(tracks[0]?.path || 'info').replace(/\.[^.]+$/, '')}.txt`
@@ -369,52 +490,143 @@ export function InfoPane({ tracks }: { tracks: TrackVm[] }) {
       <div className="info-head">
         <span>{pack.tabInfo}</span>
         <div className="info-tools">
-          <Hint label={pack.copyAll} align="end">
-            <CopyButton text={text} label={pack.copyAll} />
-          </Hint>
-          <Hint label={pack.export} align="end">
-            <button type="button" className="icon-btn" aria-label={pack.export} disabled={!text} onClick={exportInfo}>
-              <DownloadIcon />
-            </button>
-          </Hint>
-          <Hint label={pack.revealFile} align="end">
-            <button type="button" className="icon-btn" aria-label={pack.revealFile} disabled={!single} onClick={() => void reveal()}>
-              <FolderIcon />
-            </button>
-          </Hint>
-          <Hint label={pack.openFile} align="end">
-            <button type="button" className="icon-btn" aria-label={pack.openFile} disabled={!single} onClick={() => void open()}>
-              <OpenExternalIcon />
-            </button>
-          </Hint>
+          <DropdownMenu>
+            <Hint label={pack.menuMore} align="end">
+              <DropdownMenuTrigger asChild>
+                <button type="button" className="icon-btn" aria-label={pack.menuMore}>
+                  <MoreIcon />
+                </button>
+              </DropdownMenuTrigger>
+            </Hint>
+            <DropdownMenuContent align="end" sideOffset={4}>
+              <DropdownMenuItem disabled={!text} onSelect={copyAll}>
+                <CopyIcon />
+                {pack.copyAll}
+              </DropdownMenuItem>
+              <DropdownMenuItem disabled={!text} onSelect={exportInfo}>
+                <DownloadIcon />
+                {pack.export}
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem disabled={!single} onSelect={() => void reveal()}>
+                <FolderOutIcon />
+                {pack.revealFile}
+              </DropdownMenuItem>
+              <DropdownMenuItem disabled={!single} onSelect={() => void open()}>
+                <FileIcon />
+                {pack.openFile}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </div>
-      <ContextMenu onOpenChange={(open) => { if (!open) setRowIndex(null) }}>
-        <AxisScroll className="info-scroll" watch={`${tracks.length}:${items.length}`} shade>
+      <ContextMenu onOpenChange={(open) => { if (!open) setRowKey(null) }}>
+        <AxisScroll className="info-scroll" watch={`${tracks.length}:${items.length}:${order.join()}:${closed.join()}`} shade>
           {(ref) => (
             <ContextMenuTrigger asChild>
               <div
                 ref={ref}
                 className="prop-table"
                 onContextMenu={(event) => {
-                  if (!(event.target as HTMLElement).closest('.prop-row')) setRowIndex(null)
+                  const target = event.target as HTMLElement
+                  if (!target.closest('.prop-row')) setRowKey(null)
+                  const id = target.closest<HTMLElement>('.info-section')?.dataset.section
+                  setCtxSection(isSection(id) ? id : null)
                 }}
               >
-                {items.map((item, index) => {
-                  const pending = Boolean(item.slow && analysis.loading)
-                  const ready = !pending && canCopy(item.copy, pack.mixedShort)
+                {sections.map((section) => {
+                  const open = !closed.includes(section.id)
+                  const dragging = dragId === section.id
+                  const over = overId === section.id && dragId !== null && dragId !== section.id
+                  // линия показывает, куда встанет раздел: при переносе вверх — над целью, вниз — под ней
+                  const overClass = !over ? '' : order.indexOf(dragId) > order.indexOf(section.id) ? 'over-before' : 'over-after'
                   return (
-                    <div
-                      className={rowIndex === index ? 'prop-row active' : 'prop-row'}
-                      key={`${item.label}:${index}`}
-                      onContextMenu={() => setRowIndex(index)}
+                    <section
+                      key={section.id}
+                      data-section={section.id}
+                      className={['info-section', dragging ? 'dragging' : '', overClass].filter(Boolean).join(' ')}
+                      onDragOver={(event) => {
+                        if (!dragId || !event.dataTransfer.types.includes(DRAG_MIME)) return
+                        event.preventDefault()
+                        // preload (window dragover) выставляет dropEffect = 'copy' для любого драга и при
+                        // effectAllowed = 'move' отменял бы drop. Не даём событию дойти до window.
+                        event.stopPropagation()
+                        event.dataTransfer.dropEffect = 'move'
+                        if (overId !== section.id) setOverId(section.id)
+                      }}
+                      onDrop={(event) => {
+                        if (!dragId || !event.dataTransfer.types.includes(DRAG_MIME)) return
+                        event.preventDefault()
+                        event.stopPropagation()
+                        place(dragId, section.id)
+                        setDragId(null)
+                        setOverId(null)
+                      }}
                     >
-                      <span>{item.label}</span>
-                      <b>
-                        {pending ? <span className="info-spinner" role="status" aria-label={pack.reading} /> : item.value || '—'}
-                        {ready ? <CopyButton text={item.copy} label={pack.copyItem(item.label)} /> : null}
-                      </b>
-                    </div>
+                      <div className="info-section-head">
+                        <button
+                          type="button"
+                          className="info-section-toggle"
+                          aria-expanded={open}
+                          onClick={() => toggle(section.id)}
+                        >
+                          <ChevronRightIcon size={14} className={open ? 'info-chevron open' : 'info-chevron'} />
+                          <span>{titles[section.id]}</span>
+                        </button>
+                        <button
+                          type="button"
+                          className="info-grip"
+                          data-info-grip={section.id}
+                          draggable
+                          aria-label={pack.infoMoveSection}
+                          onDragStart={(event) => {
+                            event.stopPropagation()
+                            event.dataTransfer.effectAllowed = 'move'
+                            event.dataTransfer.setData(DRAG_MIME, section.id)
+                            const host = event.currentTarget.closest('.info-section')
+                            if (host) event.dataTransfer.setDragImage(host, 20, 16)
+                            // состояние ставим после снимка drag-образа, иначе он снимется уже с .dragging (opacity .45)
+                            const id = section.id
+                            window.setTimeout(() => setDragId(id), 0)
+                          }}
+                          onDragEnd={() => {
+                            setDragId(null)
+                            setOverId(null)
+                          }}
+                          onKeyDown={(event) => {
+                            if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return
+                            event.preventDefault()
+                            const index = order.indexOf(section.id)
+                            const next = order[index + (event.key === 'ArrowUp' ? -1 : 1)]
+                            if (!next) return
+                            refocus.current = section.id
+                            place(section.id, next)
+                          }}
+                        >
+                          <IconGripVertical size={16} stroke={2} aria-hidden="true" />
+                        </button>
+                      </div>
+                      {open
+                        ? section.rows.map((item) => {
+                            const key = item.id
+                            const pending = Boolean(item.slow && analysis.loading)
+                            const ready = !pending && canCopy(item.copy, pack.mixedShort)
+                            return (
+                              <div
+                                className={rowKey === key ? 'prop-row active' : 'prop-row'}
+                                key={key}
+                                onContextMenu={() => setRowKey(key)}
+                              >
+                                <span>{item.label}</span>
+                                <b>
+                                  {pending ? <span className="info-spinner" role="status" aria-label={pack.reading} /> : item.value || '—'}
+                                  {ready ? <CopyButton text={item.copy} label={pack.copyItem(item.label)} /> : null}
+                                </b>
+                              </div>
+                            )
+                          })
+                        : null}
+                    </section>
                   )
                 })}
               </div>
@@ -430,7 +642,7 @@ export function InfoPane({ tracks }: { tracks: TrackVm[] }) {
             <CopyIcon />
             {pack.copyLine}
           </ContextMenuItem>
-          <ContextMenuItem disabled={!text} onSelect={() => copyText(text)}>
+          <ContextMenuItem disabled={!text} onSelect={copyAll}>
             <CopyIcon />
             {pack.copyAll}
           </ContextMenuItem>
@@ -447,6 +659,19 @@ export function InfoPane({ tracks }: { tracks: TrackVm[] }) {
           <ContextMenuItem disabled={!single} onSelect={() => void open()}>
             <FileIcon />
             {pack.openFile}
+          </ContextMenuItem>
+          <ContextMenuSeparator />
+          <ContextMenuItem disabled={ctxSection === null} onSelect={() => ctxSection && toggle(ctxSection)}>
+            <ChevronRightIcon size={14} className={ctxOpen ? 'info-chevron open' : 'info-chevron'} />
+            {ctxOpen ? label.collapse : label.expand}
+          </ContextMenuItem>
+          <ContextMenuItem disabled={closed.length === 0} onSelect={expandAll}>
+            <ChevronRightIcon size={14} className="info-chevron" />
+            {label.expandAll}
+          </ContextMenuItem>
+          <ContextMenuItem disabled={closed.length === INFO_SECTIONS.length} onSelect={collapseAll}>
+            <ChevronRightIcon size={14} className="info-chevron open" />
+            {label.collapseAll}
           </ContextMenuItem>
         </ContextMenuContent>
       </ContextMenu>

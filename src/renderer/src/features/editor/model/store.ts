@@ -5,7 +5,7 @@ import { APPLY_FIELDS, emptyHistory, emptyTags } from '@shared/types'
 import { candidatesFor, loadFullCover, plainCover } from '@/entities/track/cover-cache'
 import { buildJobs, coverSame, numberingActive, preparePlan, previewJobs, sameValue, trackDirty, uniformField, type PlanState, type PlanTrack, type WriteChange } from '@shared/plan'
 import { hasNumberToken, orderWrites } from '@shared/filename'
-import { getPrefs, planTokens, subscribePrefs } from '@/features/settings/prefs'
+import { getPrefs, planTokens, setConfirmClearLoad, subscribePrefs } from '@/features/settings/prefs'
 import type { PreviewWords } from '@shared/plan'
 import { getLocale, getPack, tr } from '@/shared/i18n'
 import { create } from 'zustand'
@@ -74,6 +74,7 @@ interface EditorState {
   savePreview: WriteChange[] | null
   resetAsk: boolean
   closeAsk: boolean
+  clearAsk: boolean
   addPaths: (paths: string[]) => Promise<void>
   openDialog: () => Promise<void>
   openFolder: () => Promise<void>
@@ -87,6 +88,10 @@ interface EditorState {
   openCurrent: () => Promise<void>
   openFile: (path: string) => Promise<void>
   clear: () => void
+  cancelLoad: () => void
+  requestClear: () => void
+  confirmClear: (skip: boolean) => void
+  dismissClear: () => void
   remove: (path: string) => void
   removeSelected: () => void
   select: (path: string, mode: 'single' | 'toggle' | 'range') => void
@@ -526,15 +531,30 @@ function showToast(set: (partial: Partial<EditorState>) => void, toast: Toast): 
 // Чтения (addPaths / refresh / refreshSource) могут идти одновременно. loading гаснет только когда
 // закончилось ПОСЛЕДНЕЕ из них, иначе первый finally снимает флаг у ещё идущего второго (аудит B4).
 let activeLoads = 0
+let readEpoch = 0
+// сбрасывают буфер уже полученных, но ещё не показанных треков (нужно при «Стоп», чтобы они не терялись)
+const loadFlushers = new Set<() => void>()
+
+export function currentReadEpoch(): number {
+  return readEpoch
+}
 
 function beginLoad(set: (partial: Partial<EditorState>) => void): void {
   activeLoads += 1
   set({ loading: true })
 }
 
-function endLoad(set: (partial: Partial<EditorState>) => void): void {
+function endLoad(set: (partial: Partial<EditorState>) => void, epoch: number): void {
+  if (epoch !== readEpoch) return
   activeLoads = Math.max(0, activeLoads - 1)
   if (activeLoads === 0) set({ loading: false })
+}
+
+function abortLibraryRead(set: (partial: Partial<EditorState>) => void): void {
+  readEpoch += 1
+  activeLoads = 0
+  set({ loading: false })
+  window.musicTagEditor?.cancelRead()
 }
 
 function historyFromJobs(jobs: WriteJob[]): Partial<HistoryMap> {
@@ -572,6 +592,7 @@ export const useEditor = create<EditorState>((set, get) => ({
   savePreview: null,
   resetAsk: false,
   closeAsk: false,
+  clearAsk: false,
 
   addPaths: async (paths) => {
     const known = new Set(get().tracks.map((track) => pathKey(track.path)))
@@ -617,7 +638,17 @@ export const useEditor = create<EditorState>((set, get) => ({
     let primed = false
     // Автовыбор первого файла — один раз за загрузку. Сброс выделения посреди пачек его не повторяет.
     let pinned = get().selected.length > 0
+    const epoch = readEpoch
+    const alive = () => epoch === readEpoch
     const flush = () => {
+      if (!alive()) {
+        buffer = []
+        if (timer !== undefined) {
+          clearTimeout(timer)
+          timer = undefined
+        }
+        return
+      }
       if (timer !== undefined) {
         clearTimeout(timer)
         timer = undefined
@@ -628,6 +659,7 @@ export const useEditor = create<EditorState>((set, get) => ({
       commit(batch)
     }
     const accept = (incoming: TrackSnapshot[]) => {
+      if (!alive()) return
       for (const item of incoming) buffer.push(item)
       if (!primed) {
         primed = true
@@ -641,17 +673,19 @@ export const useEditor = create<EditorState>((set, get) => ({
       if (timer === undefined) timer = setTimeout(flush, LOAD_FLUSH_MS)
     }
     beginLoad(set)
+    loadFlushers.add(flush)
     const stop = window.musicTagEditor.onTrackBatch(accept)
     try {
       // stream: треки идут только пачками (onTrackBatch), без повторной отправки всего массива
       const snapshots = await window.musicTagEditor.readTags(fresh, { stream: true })
-      accept(snapshots)
+      if (alive()) accept(snapshots)
     } catch (error) {
-      showToast(set, { kind: 'err', text: error instanceof Error ? error.message : 'Не удалось прочитать файлы' })
+      if (alive()) showToast(set, { kind: 'err', text: error instanceof Error ? error.message : 'Не удалось прочитать файлы' })
     } finally {
       stop()
       flush()
-      endLoad(set)
+      loadFlushers.delete(flush)
+      endLoad(set, epoch)
     }
   },
 
@@ -705,10 +739,12 @@ export const useEditor = create<EditorState>((set, get) => ({
   refresh: async () => {
     const current = get().tracks
     if (!current.length || get().loading || get().saving || !window.musicTagEditor) return
+    const epoch = readEpoch
     beginLoad(set)
     try {
       const requested = current.map((track) => track.path)
       const snapshots = await window.musicTagEditor.readTags(requested)
+      if (epoch !== readEpoch) return
       const byPath = new Map<string, TrackSnapshot>()
       requested.forEach((path, index) => {
         const snapshot = snapshots[index]
@@ -736,18 +772,20 @@ export const useEditor = create<EditorState>((set, get) => ({
         }
       })
     } catch (error) {
-      showToast(set, { kind: 'err', text: error instanceof Error ? error.message : 'Не удалось обновить файлы' })
+      if (epoch === readEpoch) showToast(set, { kind: 'err', text: error instanceof Error ? error.message : 'Не удалось обновить файлы' })
     } finally {
-      endLoad(set)
+      endLoad(set, epoch)
     }
   },
 
   refreshSource: async () => {
     const dir = get().sourceDir
     if (!dir || get().loading || get().saving || !window.musicTagEditor) return
+    const epoch = readEpoch
     beginLoad(set)
     try {
       const snapshots = await window.musicTagEditor.readTags([dir])
+      if (epoch !== readEpoch) return
       set((state) => {
         const fresh = new Map(snapshots.map((snapshot) => [pathKey(snapshot.path), snapshot]))
         const kept = state.tracks
@@ -769,9 +807,9 @@ export const useEditor = create<EditorState>((set, get) => ({
         return { tracks: kept, selected: selected.length ? selected : anchor ? [anchor] : [], anchor }
       })
     } catch (error) {
-      showToast(set, { kind: 'err', text: error instanceof Error ? error.message : 'Не удалось обновить папку' })
+      if (epoch === readEpoch) showToast(set, { kind: 'err', text: error instanceof Error ? error.message : 'Не удалось обновить папку' })
     } finally {
-      endLoad(set)
+      endLoad(set, epoch)
     }
   },
 
@@ -823,7 +861,30 @@ export const useEditor = create<EditorState>((set, get) => ({
     if (path) await get().openFile(path)
   },
 
+  cancelLoad: () => {
+    if (!get().loading) return
+    // «Стоп» оставляет всё, что уже прочитано: сначала показываем накопленный буфер, потом обрываем чтение
+    for (const flushNow of [...loadFlushers]) flushNow()
+    abortLibraryRead(set)
+  },
+
+  requestClear: () => {
+    if (get().loading && getPrefs().confirmClearLoad) {
+      set({ clearAsk: true })
+      return
+    }
+    get().clear()
+  },
+
+  confirmClear: (skip) => {
+    if (skip) setConfirmClearLoad(false)
+    get().clear()
+  },
+
+  dismissClear: () => set({ clearAsk: false }),
+
   clear: () => {
+    abortLibraryRead(set)
     set({
       tracks: [],
       selected: [],
@@ -849,7 +910,9 @@ export const useEditor = create<EditorState>((set, get) => ({
       playCommand: null,
       nowPlaying: null,
       savePreview: null,
-      resetAsk: false
+      resetAsk: false,
+      clearAsk: false,
+      loading: false
     })
   },
 

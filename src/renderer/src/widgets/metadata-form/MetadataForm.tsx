@@ -122,6 +122,15 @@ export function MetadataForm() {
   const everywhere = fileAll && applyCover && APPLY_FIELDS.every((field) => applyAll[field])
 
   useEffect(() => {
+    const onSheet = (event: Event) => {
+      const detail = event instanceof CustomEvent ? event.detail : null
+      if (detail === 'main' || detail === 'note' || detail === 'lyrics' || detail === 'detail' || detail === 'file') setTab(detail)
+    }
+    window.addEventListener('mte-sheet-tab', onSheet)
+    return () => window.removeEventListener('mte-sheet-tab', onSheet)
+  }, [])
+
+  useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (document.querySelector('[role="dialog"][data-state="open"]')) return
       const jump = SHEET_TABS.find((id) => shortcutMatches(TAB_SHORTCUT[id], event))

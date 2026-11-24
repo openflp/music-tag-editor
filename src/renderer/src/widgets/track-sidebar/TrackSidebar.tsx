@@ -15,7 +15,7 @@ import { flushSync } from 'react-dom'
 import { CoverImg } from '@/entities/track/cover-thumb'
 import { formatBadge } from '@/entities/track/lib'
 import { copyPlain, copyTracks } from '@/features/editor/lib/copy'
-import { editorPlan, useEditor, type TrackVm } from '@/features/editor/model/store'
+import { currentReadEpoch, editorPlan, useEditor, type TrackVm } from '@/features/editor/model/store'
 import { usePrefs } from '@/features/settings/prefs'
 import { SidebarStatus } from '@/widgets/save-bar/SaveBar'
 import {
@@ -47,7 +47,7 @@ import {
   PauseIcon,
   PlayIcon,
   PlusIcon,
-  RefreshIcon,
+  RefreshStopIcon,
   SortNameIcon,
   TrashIcon
 } from '@/shared/ui/icons'
@@ -340,7 +340,8 @@ export function TrackSidebar({ loading, collapsed = false }: { loading: boolean;
   const tracks = useEditor((state) => state.tracks)
   const selected = useEditor((state) => state.selected)
   const plan = useEditor(editorPlan)
-  const clear = useEditor((state) => state.clear)
+  const requestClear = useEditor((state) => state.requestClear)
+  const cancelLoad = useEditor((state) => state.cancelLoad)
   const refresh = useEditor((state) => state.refresh)
   const refreshSource = useEditor((state) => state.refreshSource)
   const openSource = useEditor((state) => state.openSource)
@@ -354,6 +355,7 @@ export function TrackSidebar({ loading, collapsed = false }: { loading: boolean;
   const focus = useEditor((state) => state.focus)
   const saving = useEditor((state) => state.saving)
   const [refreshing, setRefreshing] = useState(false)
+  const reloadToken = useRef(0)
   // путь строки, на которой открыто контекстное меню (ref — для обработчика, state — для рендера)
   const menuPathRef = useRef<string | null>(null)
   const [menuPath, setMenuPath] = useState<string | null>(null)
@@ -758,26 +760,39 @@ export function TrackSidebar({ loading, collapsed = false }: { loading: boolean;
   const rows = placed
     ? placed.slice(span.start, span.end)
     : visible.slice(span.start, span.end).map((track) => ({ track, leaving: false }))
-  const headOpen = tracks.length > 0 || motion.exits.length > 0
+  const headOpen = tracks.length > 0 || motion.exits.length > 0 || loading
   const anchor = focus ?? selected.at(-1) ?? null
   const anchorShown = anchor !== null && rows.some((row) => row.track.path === anchor)
 
   const reload = () => {
     if (refreshing || saving) return
     setRefreshing(true)
+    const token = ++reloadToken.current
+    const epoch = currentReadEpoch()
+    // «Стоп» меняет токен и эпоху чтения: цепочка refreshSource -> refresh дальше не идёт
+    const cancelled = () => token !== reloadToken.current || epoch !== currentReadEpoch()
     const started = performance.now()
     void (async () => {
       try {
         if (useEditor.getState().sourceDir) await refreshSource()
-        if (useEditor.getState().tracks.length) await refresh()
+        if (!cancelled() && useEditor.getState().tracks.length) await refresh()
       } catch (error: unknown) {
-        useEditor.getState().notify({ kind: 'err', text: error instanceof Error && error.message ? error.message : MSG.refreshFailed })
+        if (!cancelled()) useEditor.getState().notify({ kind: 'err', text: error instanceof Error && error.message ? error.message : MSG.refreshFailed })
       } finally {
         const wait = 500 - (performance.now() - started)
-        if (wait > 0) await new Promise((resolve) => window.setTimeout(resolve, wait))
-        setRefreshing(false)
+        if (wait > 0 && !cancelled()) await new Promise((resolve) => window.setTimeout(resolve, wait))
+        if (token === reloadToken.current) setRefreshing(false)
       }
     })()
+  }
+
+  // Кнопка показывает «Стоп» всё время, пока идёт чтение, включая паузу между refreshSource и refresh,
+  // иначе иконка мигала бы Стоп -> Обновить -> Стоп.
+  const reading = loading || refreshing
+  const stopReading = () => {
+    reloadToken.current += 1
+    setRefreshing(false)
+    cancelLoad()
   }
 
   useEffect(() => {
@@ -797,15 +812,15 @@ export function TrackSidebar({ loading, collapsed = false }: { loading: boolean;
             {pack.folder}
           </DropdownMenuItem>
         </ToolMenu>
-        <Hint label={pack.refresh} align="start">
+        <Hint label={reading ? pack.stopLoad : pack.refresh} align="start">
           <button
             type="button"
             className="icon-btn"
-            aria-label={pack.refresh}
-            disabled={(!tracks.length && !sourceDir) || spinning || saving}
-            onClick={reload}
+            aria-label={reading ? pack.stopLoad : pack.refresh}
+            disabled={!reading && ((!tracks.length && !sourceDir) || saving)}
+            onClick={reading ? stopReading : reload}
           >
-            <RefreshIcon />
+            <RefreshStopIcon stop={reading} />
           </button>
         </Hint>
         <ToolMenu label={pack.sort} disabled={!tracks.length} align="start" pressed={sort !== 'open'} icon={<FilterIcon />}>
@@ -861,7 +876,7 @@ export function TrackSidebar({ loading, collapsed = false }: { loading: boolean;
             <span>{pack.files} · <span className="list-count">{tracks.length}</span></span>
             {spinning ? <span className="list-spinner" role="status" aria-label={pack.refreshing} /> : null}
           </span>
-          <button type="button" className="list-clear" onClick={clear}>{pack.clear}</button>
+          <button type="button" className="list-clear" onClick={requestClear}>{pack.clear}</button>
         </div>
       </div>
       <div

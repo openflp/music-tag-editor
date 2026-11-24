@@ -22,6 +22,9 @@ const api = {
   openFolder: (): Promise<string[]> => ipcRenderer.invoke(IPC.openFolder),
   pickFolder: (): Promise<string | null> => ipcRenderer.invoke(IPC.pickFolder),
   readTags: (paths: string[], options?: { stream?: boolean }): Promise<TrackSnapshot[]> => ipcRenderer.invoke(IPC.readTags, paths, options),
+  cancelRead: (): void => {
+    ipcRenderer.send(IPC.cancelRead)
+  },
   readDetails: (paths: string[]): Promise<TrackSnapshot[]> => ipcRenderer.invoke(IPC.readDetails, paths),
   readRhythm: (path: string): Promise<StoredRhythm> => ipcRenderer.invoke(IPC.readRhythm, path),
   readCovers: (paths: string[]): Promise<{ path: string; cover: CoverArt | null }[]> => ipcRenderer.invoke(IPC.readCovers, paths),
@@ -81,7 +84,15 @@ const api = {
 
 contextBridge.exposeInMainWorld('musicTagEditor', api)
 
+function isFileDrag(event: DragEvent): boolean {
+  const types = event.dataTransfer?.types
+  return !types || types.length === 0 || Array.from(types).includes('Files')
+}
+
 function allowExternalDrop(event: DragEvent): void {
+  // внутренние драги страницы (перестановка разделов и т. п.) не трогаем: иначе dropEffect = 'copy'
+  // конфликтует с effectAllowed = 'move' и drop отменяется
+  if (!isFileDrag(event)) return
   event.preventDefault()
   if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy'
 }

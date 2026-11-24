@@ -5,7 +5,7 @@ import { copyFile, readFile, stat, writeFile } from 'node:fs/promises'
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, nativeTheme, screen, session, shell, utilityProcess, type UtilityProcess } from 'electron'
 import { packFor, type LocaleId } from '@shared/i18n'
 import { parseLanguagePack } from '@shared/language-pack'
-import { IPC, type AppSettings, type HistoryMap, type MenuCommand, type TrackSnapshot, type WriteJob, type WriteResult } from '@shared/types'
+import { IPC, REPOSITORY_URL, type AppSettings, type HistoryMap, type MenuCommand, type TrackSnapshot, type WriteJob, type WriteResult } from '@shared/types'
 import { readStoredRhythm } from '../services/rhythm'
 import { TITLEBAR_BACKGROUND, TITLEBAR_FOREGROUND, TITLEBAR_OVERLAY_HEIGHT, WINDOW_MIN_HEIGHT, WINDOW_MIN_WIDTH } from '@shared/titlebar'
 import { installMediaProtocol, registerMediaScheme } from './media'
@@ -22,18 +22,43 @@ const here = dirname(fileURLToPath(import.meta.url))
 
 const DRAG_PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64')
 
-let dragImage: Electron.NativeImage | null = null
+const DRAG_COVER_SIDE = 64
 
-// Иконка под курсором при перетаскивании: иконка приложения (кэшируется), запасной вариант — DRAG_PNG.
-function dragIcon(): Electron.NativeImage {
-  if (dragImage && !dragImage.isEmpty()) return dragImage
+let fallbackDragImage: Electron.NativeImage | null = null
+
+// Запасная иконка (у трека нет обложки или её не удалось прочитать): иконка приложения, затем DRAG_PNG.
+function fallbackDragIcon(): Electron.NativeImage {
+  if (fallbackDragImage && !fallbackDragImage.isEmpty()) return fallbackDragImage
   const file = resolveAppIcon('icon.png')
   const fromApp = file ? nativeImage.createFromPath(file) : nativeImage.createEmpty()
   const base = fromApp.isEmpty() ? nativeImage.createFromBuffer(DRAG_PNG) : fromApp
   const icon = base.resize({ width: 48, height: 48 })
   if (icon.isEmpty()) throw new Error('Пустая иконка перетаскивания')
-  dragImage = icon
+  fallbackDragImage = icon
   return icon
+}
+
+// Иконка под курсором — обложка перетаскиваемого трека (из файла), с сохранением пропорций.
+// nativeImage читает только PNG и JPEG: для остальных форматов и треков без обложки берётся запасная иконка.
+function dragIcon(filePath: string): Electron.NativeImage {
+  try {
+    const cover = readCoverOnly(filePath)
+    if (cover && cover.dataBase64) {
+      const image = nativeImage.createFromBuffer(Buffer.from(cover.dataBase64, 'base64'))
+      if (!image.isEmpty()) {
+        const { width, height } = image.getSize()
+        const scale = DRAG_COVER_SIDE / Math.max(width, height)
+        const icon = image.resize({
+          width: Math.max(1, Math.round(width * scale)),
+          height: Math.max(1, Math.round(height * scale))
+        })
+        if (!icon.isEmpty()) return icon
+      }
+    }
+  } catch (error) {
+    console.error('drag cover failed', error)
+  }
+  return fallbackDragIcon()
 }
 
 function resolveAppIcon(file: string): string | undefined {
@@ -47,6 +72,8 @@ let win: BrowserWindow | null = null
 let crashDialog = false
 let locale: LocaleId = 'ru'
 let allowClose = false
+let quitting = false // идёт выход из приложения (Cmd+Q / app.quit)
+let pendingQuit = false // закрытие окна прервано подтверждением; после него надо дойти до выхода
 let hardwareLive = true
 
 try {
@@ -79,15 +106,102 @@ function L() {
   return packFor(locale)
 }
 
-const MENU_COMMANDS = new Set<MenuCommand>(['open', 'save', 'undo', 'redo', 'prev', 'next'])
 let accelerators = { open: 'CmdOrCtrl+O', save: 'CmdOrCtrl+S', undo: 'CmdOrCtrl+Z', redo: 'CmdOrCtrl+Y' }
 
 function sendMenu(command: MenuCommand): void {
   win?.webContents.send(IPC.menu, command)
 }
 
+function macTemplate(text: ReturnType<typeof L>): Electron.MenuItemConstructorOptions[] {
+  const sep: Electron.MenuItemConstructorOptions = { type: 'separator' }
+  // Шорткаты, которых main не знает (палитра, настройки...), живут в renderer: здесь только подписи.
+  const cmd = (label: string, command: MenuCommand, accelerator?: string): Electron.MenuItemConstructorOptions => ({
+    label,
+    accelerator: accelerator || undefined,
+    click: () => sendMenu(command)
+  })
+  return [
+    { role: 'appMenu' },
+    {
+      label: text.file,
+      submenu: [
+        cmd(text.openFiles, 'open', accelerators.open),
+        cmd(text.openFolder, 'folder'),
+        sep,
+        cmd(text.writeTags, 'save', accelerators.save),
+        cmd(text.refresh, 'refresh'),
+        sep,
+        cmd(text.revealFile, 'reveal'),
+        cmd(text.openFile, 'openFile'),
+        sep,
+        cmd(text.removeOne, 'remove'),
+        cmd(text.clearList, 'clear'),
+        sep,
+        { role: 'close' }
+      ]
+    },
+    {
+      label: text.edit,
+      submenu: [
+        cmd(text.undo, 'undo', accelerators.undo),
+        cmd(text.redo, 'redo', accelerators.redo),
+        sep,
+        { role: 'cut' },
+        { role: 'copy' },
+        { role: 'paste' },
+        { role: 'selectAll' }
+      ]
+    },
+    {
+      label: text.view,
+      submenu: [
+        cmd(text.searchCommands, 'palette'),
+        cmd(text.settings, 'settings'),
+        sep,
+        // TODO: подпись «показать/скрыть» зависит от состояния renderer — нужен отдельный IPC
+        cmd(text.showList, 'toggleSidebar'),
+        cmd(text.showPlayer, 'togglePlayer'),
+        sep,
+        cmd(text.prevFile, 'prev'),
+        cmd(text.nextFile, 'next'),
+        sep,
+        {
+          label: text.sections,
+          submenu: [
+            cmd(text.tabMain, 'tab:main'),
+            cmd(text.tabNote, 'tab:note'),
+            cmd(text.tabLyrics, 'tab:lyrics'),
+            cmd(text.tabInfo, 'tab:detail'),
+            cmd(text.tabFile, 'tab:file')
+          ]
+        },
+        sep,
+        { role: 'resetZoom', label: text.nativeZoom },
+        { role: 'zoomIn', label: text.nativeZoomIn },
+        { role: 'zoomOut', label: text.nativeZoomOut },
+        { role: 'togglefullscreen' },
+        sep,
+        { role: 'reload', label: text.nativeReload },
+        { role: 'toggleDevTools', label: text.nativeDevtools }
+      ]
+    },
+    { role: 'windowMenu' },
+    {
+      role: 'help',
+      submenu: [
+        { label: text.github, click: () => void shell.openExternal(REPOSITORY_URL) },
+        { label: text.crashReport, click: () => void shell.openExternal(issueReportUrl('', text.crashTitle)) }
+      ]
+    }
+  ]
+}
+
 function buildMenu(): void {
   const text = L()
+  if (process.platform === 'darwin') {
+    Menu.setApplicationMenu(Menu.buildFromTemplate(macTemplate(text)))
+    return
+  }
   const template: Electron.MenuItemConstructorOptions[] = [
     {
       label: text.file,
@@ -158,8 +272,10 @@ async function createWindow(): Promise<void> {
     y: saved?.y,
     show: false,
     backgroundColor: TITLEBAR_BACKGROUND,
-    frame: false,
+    // macOS: frame:false убирает светофор, поэтому там frame:true + скрытый заголовок
+    frame: process.platform === 'darwin',
     titleBarStyle: 'hidden',
+    ...(process.platform === 'darwin' ? { trafficLightPosition: { x: 14, y: Math.round((TITLEBAR_OVERLAY_HEIGHT - 12) / 2) } } : {}),
     titleBarOverlay:
       process.platform === 'win32'
         ? {
@@ -187,6 +303,9 @@ async function createWindow(): Promise<void> {
     console.error('Titlebar failed', error)
   }
   win.on('ready-to-show', () => win?.show())
+  win.on('closed', () => {
+    win = null
+  })
   win.on('close', (event) => {
     if (!win) return
     const pageReady = !win.webContents.isLoading() && !win.webContents.isCrashed()
@@ -195,6 +314,8 @@ async function createWindow(): Promise<void> {
       return
     }
     event.preventDefault()
+    pendingQuit = quitting
+    quitting = false
     if (win.isMinimized()) win.restore()
     win.show()
     win.focus()
@@ -295,51 +416,89 @@ async function writeAll(jobs: WriteJob[]): Promise<WriteResult[]> {
 type ReaderRequest = { kind: 'read'; inputs: string[] } | { kind: 'details'; paths: string[] } | { kind: 'covers'; paths: string[] }
 type CoverItem = { path: string; cover: CoverArt | null }
 
+class ReadCancelled extends Error {
+  constructor() {
+    super('cancelled')
+    this.name = 'ReadCancelled'
+  }
+}
+
+let readEpoch = 0
+const readers = new Set<{ kind: ReaderRequest['kind']; cancel: () => void }>()
+
+function cancelTagReads(): void {
+  readEpoch += 1
+  for (const reader of readers) {
+    if (reader.kind === 'read') reader.cancel()
+  }
+}
+
 // Читаем теги в отдельном процессе (как запись): taglib синхронный и на тысячах файлов
 // иначе вешает main — а с ним окно и перетаскивание.
 function readWithUtility(request: ReaderRequest, onBatch: (tracks: TrackSnapshot[]) => void, onCovers?: (items: CoverItem[]) => void): Promise<void> {
   const workerPath = join(here, 'writer.js')
   return new Promise((resolve, reject) => {
-    let child: UtilityProcess
-    try {
-      child = utilityProcess.fork(workerPath, [], { serviceName: 'tag-reader', stdio: 'pipe' })
-    } catch (error) {
-      reject(error)
-      return
-    }
+    let child: UtilityProcess | undefined
     let settled = false
+    let cancelled = false
     const finish = (error?: Error) => {
       if (settled) return
       settled = true
+      readers.delete(entry)
       clearTimeout(timer)
-      child.kill()
+      child?.kill()
       if (error) reject(error)
       else resolve()
     }
+    const entry = {
+      kind: request.kind,
+      cancel: () => {
+        cancelled = true
+        finish(new ReadCancelled())
+      }
+    }
     const timer = setTimeout(() => finish(new Error('Чтение заняло слишком много времени')), 10 * 60 * 1000)
+    try {
+      child = utilityProcess.fork(workerPath, [], { serviceName: 'tag-reader', stdio: 'pipe' })
+    } catch (error) {
+      clearTimeout(timer)
+      reject(error instanceof Error ? error : new Error('Не удалось прочитать файлы'))
+      return
+    }
+    readers.add(entry)
     child.on('message', (message: { type?: string; tracks?: TrackSnapshot[]; items?: CoverItem[]; message?: string }) => {
+      if (cancelled) return
       if (message?.type === 'batch' && Array.isArray(message.tracks)) onBatch(message.tracks)
       else if (message?.type === 'covers' && Array.isArray(message.items)) onCovers?.(message.items)
       else if (message?.type === 'done') finish()
       else if (message?.type === 'error') finish(new Error(message.message || 'Не удалось прочитать файлы'))
     })
-    child.once('exit', () => finish(new Error('Процесс чтения остановился')))
+    child.once('exit', () => {
+      if (cancelled || settled) return
+      finish(new Error('Процесс чтения остановился'))
+    })
     child.postMessage(request)
   })
 }
 
 async function readAll(inputs: string[], onBatch: (tracks: TrackSnapshot[]) => void): Promise<void> {
+  const epoch = readEpoch
+  const cancelled = () => epoch !== readEpoch
   let started = false
   try {
     await readWithUtility({ kind: 'read', inputs }, (tracks) => {
+      if (cancelled()) return
       started = true
       onBatch(tracks)
     })
   } catch (error) {
+    if (cancelled() || error instanceof ReadCancelled) return
     // уже что-то отдали — повторять нельзя, иначе пойдут дубли
     if (started) throw error
     console.error('Utility reader unavailable, reading in main', error)
-    await readTracks(inputs, onBatch, { lite: true })
+    await readTracks(inputs, (tracks) => {
+      if (!cancelled()) onBatch(tracks)
+    }, { lite: true, cancelled })
   }
 }
 
@@ -396,6 +555,10 @@ function registerIpc(): void {
     })
     if (result.canceled) return null
     return result.filePaths[0] ?? null
+  })
+
+  ipcMain.on(IPC.cancelRead, () => {
+    cancelTagReads()
   })
 
   ipcMain.handle(IPC.readTags, async (event, payload: unknown, options: unknown) => {
@@ -511,7 +674,7 @@ function registerIpc(): void {
     try {
       const files = assertDragFiles(payload)
       if (!files.length) return
-      event.sender.startDrag({ file: files[0], files, icon: dragIcon() })
+      event.sender.startDrag({ file: files[0], files, icon: dragIcon(files[0]) })
     } catch (error) {
       console.error('startDrag failed', error)
     }
@@ -562,7 +725,10 @@ function registerIpc(): void {
   ipcMain.handle(IPC.closeConfirm, (_event, payload: unknown) => {
     assertCloseConfirm(payload)
     allowClose = true
-    win?.close()
+    if (pendingQuit) {
+      pendingQuit = false
+      app.quit()
+    } else win?.close()
   })
   ipcMain.handle(IPC.setShortcuts, (_event, payload: unknown) => {
     if (!payload || typeof payload !== 'object') throw new Error('Некорректное сочетание')
@@ -632,8 +798,12 @@ if (!gotLock) {
       if (BrowserWindow.getAllWindows().length === 0) createWindow()
     })
   })
+  app.on('before-quit', () => {
+    quitting = true
+  })
+  // macOS: приложение живёт без окон, окно возвращает activate
   app.on('window-all-closed', () => {
-    app.quit()
+    if (process.platform !== 'darwin') app.quit()
   })
 }
 

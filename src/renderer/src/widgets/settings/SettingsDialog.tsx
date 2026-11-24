@@ -1,3 +1,4 @@
+import { isLinux, isMac } from '@/shared/lib/platform'
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import { NAME_TOKENS } from '@shared/filename'
 import type { Pack } from '@shared/i18n'
@@ -14,12 +15,14 @@ import {
   resetShortcuts,
   setConfirmClose,
   setConfirmReset,
+  setConfirmClearLoad,
   setConfirmWrite,
   setNumberStart,
   setNumberWidth,
   setRememberVolume,
   setShowFormatBadges,
   chordFromEvent,
+  formatChord,
   setShortcut,
   shortcutOf,
   tokenNameError,
@@ -68,7 +71,8 @@ const TOKEN_LABEL: Record<string, keyof Pack> = {
   '%n%': 'settingsNumbers'
 }
 
-type SectionId = 'language' | 'shortcuts' | 'operators' | 'writing' | 'playback' | 'system'
+export type SettingsSection = 'language' | 'shortcuts' | 'operators' | 'writing' | 'playback' | 'system'
+type SectionId = SettingsSection
 
 function keepSelect(event: { preventDefault: () => void; target: EventTarget | null }) {
   const target = event.target
@@ -82,18 +86,18 @@ function sectionText(id: SectionId, pack: Pack, extra: string): string {
   if (id === 'operators') {
     return `${pack.settingsOperators} ${pack.settingsNumbering} ${pack.settingsNumberStart} ${pack.settingsNumberWidth} ${NAME_TOKENS.map((item) => item.token).join(' ')} ${extra}`
   }
-  if (id === 'writing') return `${pack.settingsWriting} ${pack.settingsConfirmWrite} ${pack.settingsConfirmClose} ${pack.settingsConfirmReset}`
+  if (id === 'writing') return `${pack.settingsWriting} ${pack.settingsConfirmWrite} ${pack.settingsConfirmClose} ${pack.settingsConfirmReset} ${pack.settingsConfirmClear}`
   if (id === 'playback') return `${pack.settingsPlayback} ${pack.settingsRememberVolume} ${pack.settingsThrottle}`
   return `${pack.settingsSystem} ${pack.settingsMenu} ${pack.settingsMenuIcon} ${pack.settingsMenuBar} ${pack.settingsFormatBadges} ${pack.settingsHardware} ${pack.settingsSpellcheck} ${pack.settingsZoom} ${pack.settingsLogin} ${pack.settingsOnTop} ${pack.settingsRestore}`
 }
 
-export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+export function SettingsDialog({ open, onClose, section: requested = 'language' }: { open: boolean; onClose: () => void; section?: SettingsSection }) {
   const { locale, pack, setLocale } = useI18n()
   const prefs = usePrefs()
   const app = useAppSettings()
   const notify = useEditor((state) => state.notify)
   const [query, setQuery] = useState('')
-  const [section, setSection] = useState<SectionId>('language')
+  const [section, setSection] = useState<SectionId>(requested)
   const [capture, setCapture] = useState<ShortcutId | null>(null)
   const [name, setName] = useState('')
   const [value, setValue] = useState('')
@@ -118,6 +122,12 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
     if (!needle) return rows
     return rows.filter((row) => `${row.title} ${row.text}`.toLowerCase().includes(needle))
   }, [pack, packs, query, shortcutWords, tokenWords])
+
+  useEffect(() => {
+    if (!open) return
+    setQuery('')
+    setSection(requested)
+  }, [open, requested])
 
   useEffect(() => {
     if (!sections.length) return
@@ -374,6 +384,7 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
                 <SettingSwitch title={pack.settingsConfirmWrite} hint={pack.settingsConfirmWriteHint} on={prefs.confirmWrite} onChange={setConfirmWrite} />
                 <SettingSwitch title={pack.settingsConfirmClose} hint={pack.settingsConfirmCloseHint} on={prefs.confirmClose} onChange={setConfirmClose} />
                 <SettingSwitch title={pack.settingsConfirmReset} hint={pack.settingsConfirmResetHint} on={prefs.confirmReset} onChange={setConfirmReset} />
+                <SettingSwitch title={pack.settingsConfirmClear} hint={pack.settingsConfirmClearHint} on={prefs.confirmClearLoad} onChange={setConfirmClearLoad} />
               </section>
             ) : null}
             {section === 'playback' ? (
@@ -389,6 +400,7 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
             ) : null}
             {section === 'system' ? (
               <section className="settings-page">
+                {isMac ? null : (
                 <div className="settings-row">
                   <span className="settings-row-copy">
                     <b>{pack.settingsMenu}</b>
@@ -404,6 +416,7 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
                     onChange={(mode) => setAppSetting('menuBar', mode)}
                   />
                 </div>
+                )}
                 <SettingSwitch
                   title={pack.settingsFormatBadges}
                   hint={pack.settingsFormatBadgesHint}
@@ -422,12 +435,14 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
                   on={app.settings.spellcheck}
                   onChange={(next) => setAppSetting('spellcheck', next)}
                 />
+                {isLinux ? null : (
                 <SettingSwitch
                   title={pack.settingsLogin}
                   hint={pack.settingsLoginHint}
                   on={app.settings.openAtLogin}
                   onChange={(next) => setAppSetting('openAtLogin', next)}
                 />
+                )}
                 <SettingSwitch
                   title={pack.settingsOnTop}
                   hint={pack.settingsOnTopHint}
@@ -525,7 +540,7 @@ function ShortcutRow({ id, label, capture, onCapture }: { id: ShortcutId; label:
     <li className="settings-shortcut">
       <span>{label}</span>
       <button type="button" className={live ? 'settings-key on' : 'settings-key'} onClick={() => onCapture(live ? null : id)}>
-        {live ? pack.settingsPressKeys : chord || pack.settingsNone}
+        {live ? pack.settingsPressKeys : formatChord(chord) || pack.settingsNone}
       </button>
     </li>
   )

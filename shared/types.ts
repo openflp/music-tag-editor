@@ -169,7 +169,26 @@ export interface ProgressEvent {
 
 export type HistoryMap = Record<HistoryField, string[]>
 
-export type MenuCommand = 'open' | 'save' | 'undo' | 'redo' | 'prev' | 'next'
+export type SheetTab = 'main' | 'note' | 'lyrics' | 'detail' | 'file'
+
+export type MenuCommand =
+  | 'open'
+  | 'folder'
+  | 'save'
+  | 'undo'
+  | 'redo'
+  | 'prev'
+  | 'next'
+  | 'refresh'
+  | 'remove'
+  | 'clear'
+  | 'reveal'
+  | 'openFile'
+  | 'palette'
+  | 'settings'
+  | 'toggleSidebar'
+  | 'togglePlayer'
+  | `tab:${SheetTab}`
 
 export const ZOOM_STEPS = [0.8, 0.9, 1, 1.1, 1.25, 1.5] as const
 
@@ -214,6 +233,7 @@ export const IPC = {
   openFolder: 'files:open-folder',
   pickFolder: 'files:pick-folder',
   readTags: 'tags:read',
+  cancelRead: 'tags:cancel',
   readDetails: 'tags:details',
   readRhythm: 'tags:rhythm',
   readCovers: 'tags:covers',

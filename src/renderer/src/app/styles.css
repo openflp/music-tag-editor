@@ -1,4 +1,3 @@
-/* styles.css — ЧАСТЬ 1 из 2. Склеивать строго по порядку: part1 + part2 (cat styles.part1.css styles.part2.css > styles.css). */
 @import "tailwindcss";
 @source "../";
 
@@ -857,6 +856,49 @@ label.menu-item { cursor: pointer; }
   flex: none;
   max-width: none;
 }
+
+.icon-swap {
+  width: 16px;
+  height: 16px;
+  display: grid;
+  flex: none;
+}
+
+.icon-swap > svg {
+  grid-area: 1 / 1;
+  transition:
+    opacity 180ms ease,
+    transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.icon-swap > svg:last-child {
+  opacity: 0;
+  transform: scale(0.64);
+}
+
+.icon-swap.is-stop > svg:first-child {
+  opacity: 0;
+  transform: rotate(-80deg) scale(0.64);
+}
+
+.icon-swap.is-stop > svg:last-child {
+  opacity: 1;
+  transform: none;
+}
+
+.swap-label {
+  display: grid;
+}
+
+.swap-label > span {
+  grid-area: 1 / 1;
+  transition: opacity 180ms ease;
+}
+
+.swap-label > span:last-child { opacity: 0; }
+
+.swap-label.is-stop > span:first-child { opacity: 0; }
+.swap-label.is-stop > span:last-child { opacity: 1; }
 
 .icon-btn {
   width: 28px;
@@ -4992,6 +5034,92 @@ label.menu-item { cursor: pointer; }
 
 .info-pane .prop-row + .prop-row { border-top: 1px solid var(--line); }
 
+.info-section-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 32px;
+  padding: 2px 6px 2px 4px;
+  background: rgb(255 255 255 / 0.035);
+}
+
+.info-section + .info-section > .info-section-head,
+.info-section .info-section-head + .prop-row { border-top: 1px solid var(--line); }
+
+.info-section.over-before > .info-section-head { box-shadow: inset 0 2px 0 var(--accent); }
+
+.info-section.over-after { box-shadow: inset 0 -2px 0 var(--accent); }
+
+.info-section.dragging { opacity: 0.45; }
+
+.info-section-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  margin: 0;
+  padding: 0 4px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  font: 600 12px/22px Inter, Segoe UI, system-ui, sans-serif;
+  text-align: left;
+  cursor: pointer;
+}
+
+.info-section-toggle span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.info-section-head:hover { background: rgb(255 255 255 / 0.07); }
+
+.info-section.dragging > .info-section-head:hover { background: rgb(255 255 255 / 0.035); }
+
+.info-section-toggle:focus-visible,
+.info-grip:focus-visible {
+  outline: 2px solid var(--link);
+  outline-offset: 1px;
+}
+
+.info-chevron {
+  flex: none;
+  color: var(--muted);
+  transition: transform 160ms ease;
+}
+
+.info-chevron.open { transform: rotate(90deg); }
+
+.info-grip {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 22px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  cursor: grab;
+}
+
+.info-grip:hover { color: var(--text); }
+
+.info-grip svg { display: block; width: 16px; height: 16px; }
+
+.info-grip:active { cursor: grabbing; }
+
+@media (prefers-reduced-motion: reduce) {
+  .info-chevron { transition: none; }
+}
+
 
 /* ════════════════════════════════════════════════════════════════
    ИНФОРМАЦИЯ: убираем «лишние» пиксели сверху таблицы.
@@ -5004,6 +5132,18 @@ label.menu-item { cursor: pointer; }
 
 .info-pane .info-scroll .prop-table { padding: 0; }
 .info-pane .info-scroll .prop-row:first-child { border-top: 0; }
+
+/* нижний разделитель у последнего пункта (и у закрытого, и у открытого) */
+.info-pane .prop-table > .info-section:last-child { border-bottom: 1px solid var(--line); }
+
+/* значения можно выделять мышью: глобально стоит * { user-select: none } */
+.info-pane .prop-row b {
+  user-select: text;
+  -webkit-user-select: text;
+  cursor: text;
+}
+
+.info-pane .prop-row b .copy-swap { cursor: pointer; }
 
 
 /* ════════════════════════════════════════════════════════════════
@@ -6069,3 +6209,33 @@ kbd {
 /* строки без стрелки, но со знаком: «+ …» / «− …» */
 .save-line.add { color: var(--ok); }
 .save-line.del { color: var(--danger); }
+
+/* ════════════════════════════════════════════════════════════════
+   TITLEBAR: платформенные правки
+   ════════════════════════════════════════════════════════════════ */
+
+/* Модальные окна лежат поверх titlebar, но drag-область z-index игнорирует:
+   без no-drag клик по полосе над диалогом тянул окно вместо закрытия диалога. */
+[data-slot="dialog-overlay"],
+[data-slot="dialog-content"],
+.command-glass,
+.settings-window,
+.drag-overlay.on {
+  -webkit-app-region: no-drag;
+}
+
+/* macOS: нативный светофор (main: frame:true + trafficLightPosition) и нативное меню.
+   Кнопки и иконку cet не показываем, слева резервируем место под светофор. */
+:root[data-platform="darwin"] .cet-window-controls,
+:root[data-platform="darwin"] .cet-icon {
+  display: none !important;
+}
+
+:root[data-platform="darwin"] #mte-titlebar-left {
+  padding-left: 78px;
+}
+
+/* в полноэкранном режиме светофор скрыт (атрибут ставит cet: onWindowFullScreen) */
+:root[data-platform="darwin"][data-titlebar-fullscreen] #mte-titlebar-left {
+  padding-left: 8px;
+}

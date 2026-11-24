@@ -10,6 +10,7 @@ export interface MusicApi {
   pickFolder: () => Promise<string | null>
   // stream: true — треки приходят только пачками через onTrackBatch, итоговый массив пустой
   readTags: (paths: string[], options?: { stream?: boolean }) => Promise<TrackSnapshot[]>
+  cancelRead: () => void
   readDetails: (paths: string[]) => Promise<TrackSnapshot[]>
   readRhythm: (path: string) => Promise<StoredRhythm>
   readCovers: (paths: string[]) => Promise<{ path: string; cover: CoverArt | null }[]>
