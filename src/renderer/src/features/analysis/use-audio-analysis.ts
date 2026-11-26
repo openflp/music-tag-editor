@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { camelotOf } from '@shared/key'
-import { initialKeyOf, partsOf, roundBpm, type AnalysisResult, type StoredRhythm } from '@shared/analysis'
+import { initialKeyOf, partsOf, roundBpm, snapBpm, type AnalysisResult, type StoredRhythm } from '@shared/analysis'
 import { getPack } from '@/shared/i18n'
 import { useEditor } from '@/features/editor/model/store'
 import { monoSlice, readAudioBytes } from './decode'
@@ -12,6 +12,8 @@ export interface AudioAnalysisState {
   result: AnalysisResult | null
   saving: boolean
   save: () => Promise<void>
+  /** Исправить ошибку «в 2 раза»: ×2 или ×0.5. Значение пересчитывается и заносится в трек как после анализа. */
+  scaleBpm: (factor: number) => void
 }
 
 function fromTags(bpm: number, initialKey: string): AnalysisResult {
@@ -107,5 +109,16 @@ export function useAudioAnalysis(filePath: string | null): AudioAnalysisState {
     }
   }, [filePath, noteRhythm, result, saving])
 
-  return { loading, error, result, saving, save }
+  const scaleBpm = useCallback(
+    (factor: number) => {
+      if (!filePath || !result) return
+      const bpm = snapBpm(result.bpm * factor)
+      if (!bpm) return
+      setResult({ ...result, bpm })
+      noteRhythm(filePath, bpm, result.initialKey)
+    },
+    [filePath, noteRhythm, result]
+  )
+
+  return { loading, error, result, saving, save, scaleBpm }
 }

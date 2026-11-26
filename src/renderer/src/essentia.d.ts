@@ -18,6 +18,7 @@ declare module 'essentia.js/dist/essentia.js-core.es.js' {
   export default class Essentia {
     constructor(wasm: unknown, isDebug?: boolean)
     arrayToVector(input: Float32Array): VectorFloat
+    vectorToArray(input: VectorFloat): Float32Array
     RhythmExtractor2013(signal: VectorFloat, maxTempo?: number, method?: string, minTempo?: number): RhythmVectors
     KeyExtractor(audio: VectorFloat): KeyVectors
     shutdown(): void

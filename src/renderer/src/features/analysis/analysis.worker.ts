@@ -2,7 +2,7 @@ import Essentia from 'essentia.js/dist/essentia.js-core.es.js'
 import { EssentiaWASM } from 'essentia.js/dist/essentia-wasm.es.js'
 import essentiaWasmUrl from 'essentia.js/dist/essentia-wasm.web.wasm?url'
 import { camelotOf } from '@shared/key'
-import { initialKeyOf, roundBpm, type AnalysisResult } from '@shared/analysis'
+import { initialKeyOf, snapBpm, type AnalysisResult } from '@shared/analysis'
 
 interface RequestMessage {
   id: number
@@ -37,6 +37,36 @@ function release(value: VectorFloat | undefined): void {
   value?.delete?.()
 }
 
+/**
+ * RhythmExtractor2013 отдаёт bpm как оценку по распределению интервалов между долями — отсюда 139.9
+ * вместо 140. Точнее подогнать прямую по самим отметкам долей: время_доли = t0 + k · период.
+ * Номер доли k берём округлением, поэтому пропущенные доли подгонку не ломают.
+ */
+function refineBpm(estimate: number, ticks: ArrayLike<number>): number {
+  if (!(estimate > 0) || ticks.length < 16) return estimate
+  const period = 60 / estimate
+  const first = ticks[0]
+  let sx = 0
+  let sy = 0
+  let sxx = 0
+  let sxy = 0
+  const n = ticks.length
+  for (let i = 0; i < n; i += 1) {
+    const x = Math.round((ticks[i] - first) / period)
+    const y = ticks[i]
+    sx += x
+    sy += y
+    sxx += x * x
+    sxy += x * y
+  }
+  const denom = n * sxx - sx * sx
+  if (denom === 0) return estimate
+  const slope = (n * sxy - sx * sy) / denom
+  const fitted = 60 / slope
+  // подгонка должна лишь уточнять оценку: расхождение больше 2% — это уже другой темп, не верим ей
+  return Number.isFinite(fitted) && Math.abs(fitted - estimate) / estimate < 0.02 ? fitted : estimate
+}
+
 let engine: Promise<Essentia> | null = null
 
 function wasmEngine(): Promise<Essentia> {
@@ -56,7 +86,8 @@ async function analyze(samples: Float32Array): Promise<Pick<AnalysisResult, 'bpm
   try {
     const rhythm = essentia.RhythmExtractor2013(vector)
     const tonal = essentia.KeyExtractor(vector)
-    const bpm = roundBpm(rhythm.bpm)
+    const ticks = rhythm.ticks ? essentia.vectorToArray(rhythm.ticks) : []
+    const bpm = snapBpm(refineBpm(rhythm.bpm, ticks))
     const key = String(tonal.key ?? '').trim()
     const scale = String(tonal.scale ?? '').toLowerCase() === 'minor' ? 'minor' : 'major'
     release(rhythm.ticks)

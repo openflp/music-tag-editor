@@ -1,4 +1,4 @@
-import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { shortcutMatches, type ShortcutId } from '@/features/settings/prefs'
 import { coverSrc } from '@/entities/track/lib'
 import { selectionTracks, useEditor, type TrackVm } from '@/features/editor/model/store'
@@ -6,7 +6,8 @@ import { APPLY_FIELDS, HISTORY_FIELDS, type HistoryField, type TagField } from '
 import { NAME_TOKENS } from '@shared/filename'
 import { sameValue, uniformField } from '@shared/plan'
 import { HoverCard } from 'radix-ui'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Tabs, TabsContent } from '@/components/ui/tabs'
+import { SheetTabs } from './sheet-tabs'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
 import { Hint } from '@/components/ui/tooltip'
 import { CloseIcon, CoverIcon, DownloadIcon, EyeIcon, FolderIcon, HelpIcon, ImageIcon, TrashIcon } from '@/shared/ui/icons'
@@ -102,7 +103,6 @@ function TrackCover() {
 
 export function MetadataForm() {
   const { pack } = useI18n()
-  const tracks = useEditor((state) => state.tracks)
   const picked = useEditor(selectionTracks)
   const applyAll = useEditor((state) => state.applyAll)
   const applyValues = useEditor((state) => state.applyValues)
@@ -180,42 +180,33 @@ export function MetadataForm() {
     return { mixed: view.mixed, value: view.mixed ? null : view.value }
   }
 
-  // варианты для выпадающих списков: сортировка по всем трекам на каждый символ в поле не нужна.
-  // Пачка дописывается в конец, поэтому частоты копятся только по новым строкам.
-  const deferredTracks = useDeferredValue(tracks)
-  const optionCache = useRef<{ tracks: TrackVm[]; bags: Map<HistoryField, Map<string, number>> } | null>(null)
-  const optionMap = useMemo(() => {
-    const prev = optionCache.current
-    const grown =
-      prev !== null &&
-      prev.tracks.length <= deferredTracks.length &&
-      prev.tracks.every((track, index) => track === deferredTracks[index])
-    const bags = new Map<HistoryField, Map<string, number>>()
+  // Варианты для выпадающих списков считаются лениво: только для того поля, чей список открыли,
+  // и по текущему массиву треков из стора. Раньше useMemo пересчитывал все поля по всем трекам
+  // на каждый символ (правка меняет объект трека, и инкрементальный кэш не срабатывал).
+  // Подписки на tracks у формы больше нет — она не перерисовывается из-за чужих правок списка.
+  const optionCache = useRef(new Map<HistoryField, { tracks: TrackVm[]; list: { value: string; count: number }[] }>())
+  const optionGetters = useMemo(() => {
+    const getters = {} as Record<HistoryField, () => { value: string; count: number }[]>
     for (const field of HISTORY_FIELDS) {
-      bags.set(field, grown ? new Map(prev.bags.get(field)) : new Map())
-    }
-    const from = grown ? prev.tracks.length : 0
-    for (let index = from; index < deferredTracks.length; index += 1) {
-      const track = deferredTracks[index]
-      if (track.error) continue
-      for (const field of HISTORY_FIELDS) {
-        const value = String(track.draft[field] ?? '').trim()
-        if (!value) continue
-        const bag = bags.get(field) as Map<string, number>
-        bag.set(value, (bag.get(value) ?? 0) + 1)
+      getters[field] = () => {
+        const all = useEditor.getState().tracks
+        const hit = optionCache.current.get(field)
+        if (hit && hit.tracks === all) return hit.list
+        const bag = new Map<string, number>()
+        for (const track of all) {
+          if (track.error) continue
+          const value = String(track.draft[field] ?? '').trim()
+          if (value) bag.set(value, (bag.get(value) ?? 0) + 1)
+        }
+        // один Collator на проход: localeCompare(…, locale) на каждое сравнение многократно дороже
+        const collator = new Intl.Collator(getLocale())
+        const list = [...bag.entries()].sort((left, right) => collator.compare(left[0], right[0])).map(([value, count]) => ({ value, count }))
+        optionCache.current.set(field, { tracks: all, list })
+        return list
       }
     }
-    optionCache.current = { tracks: deferredTracks, bags }
-    const map = {} as Record<HistoryField, { value: string; count: number }[]>
-    // один Collator на проход: localeCompare(…, locale) на каждое сравнение многократно дороже
-    const collator = new Intl.Collator(getLocale())
-    for (const field of HISTORY_FIELDS) {
-      map[field] = [...(bags.get(field) as Map<string, number>).entries()]
-        .sort((left, right) => collator.compare(left[0], right[0]))
-        .map(([value, count]) => ({ value, count }))
-    }
-    return map
-  }, [deferredTracks])
+    return getters
+  }, [])
 
   if (picked.length > 0 && !editable.length) {
     return (
@@ -260,13 +251,14 @@ export function MetadataForm() {
       <Tabs value={tab} onValueChange={(value) => {
         if ((SHEET_TABS as readonly string[]).includes(value)) setTab(value as SheetTab)
       }} className="sheet">
-        <TabsList aria-label={pack.tabs} variant="line" className="sheet-tabs">
-          <TabsTrigger value="main" className="sheet-tab">{pack.tabMain}</TabsTrigger>
-          <TabsTrigger value="note" className="sheet-tab">{pack.tabNote}</TabsTrigger>
-          <TabsTrigger value="lyrics" className="sheet-tab">{pack.tabLyrics}</TabsTrigger>
-          <TabsTrigger value="detail" className="sheet-tab">{pack.tabInfo}</TabsTrigger>
-          <TabsTrigger value="file" className="sheet-tab">{pack.tabFile}</TabsTrigger>
-        </TabsList>
+        <SheetTabs
+          ids={SHEET_TABS}
+          labels={{ main: pack.tabMain, note: pack.tabNote, lyrics: pack.tabLyrics, detail: pack.tabInfo, file: pack.tabFile }}
+          active={tab}
+          onSelect={setTab}
+          label={pack.tabs}
+          moreLabel={pack.tabs}
+        />
       <TabsContent value="main" className="groups main-pane">
         <FieldGroup
           title={pack.groupTrack}
@@ -281,7 +273,7 @@ export function MetadataForm() {
             mixed={artist.mixed}
             disabled={disabled}
             combo
-            options={optionMap.artist}
+            getOptions={optionGetters.artist}
             history={history.artist ?? []}
             onChange={(value) => setField('artist', value)}
           />
@@ -291,7 +283,7 @@ export function MetadataForm() {
             mixed={genre.mixed}
             disabled={disabled}
             combo
-            options={optionMap.genre}
+            getOptions={optionGetters.genre}
             history={history.genre ?? []}
             onChange={(value) => setField('genre', value)}
           />
@@ -311,7 +303,7 @@ export function MetadataForm() {
             mixed={album.mixed}
             disabled={disabled}
             combo
-            options={optionMap.album}
+            getOptions={optionGetters.album}
             history={history.album ?? []}
             onChange={(value) => setField('album', value)}
           />
@@ -321,7 +313,7 @@ export function MetadataForm() {
             mixed={albumArtist.mixed}
             disabled={disabled}
             combo
-            options={optionMap.albumArtist}
+            getOptions={optionGetters.albumArtist}
             history={history.albumArtist ?? []}
             onChange={(value) => setField('albumArtist', value)}
           />

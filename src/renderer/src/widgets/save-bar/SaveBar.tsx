@@ -758,11 +758,11 @@ export function SaveDialogs() {
         <DialogContent className="ask-dialog" data-no-track-nav="">
           <DialogTitle>{pack.askClearTitle}</DialogTitle>
           <DialogDescription>{pack.askClearBody}</DialogDescription>
-          <label className="ask-skip">
-            <input type="checkbox" checked={skipClearAsk} onChange={(event) => setSkipClearAsk(event.target.checked)} />
-            {pack.askClearSkip}
-          </label>
           <div className="ask-actions">
+            <label className="ask-skip">
+              <input type="checkbox" checked={skipClearAsk} onChange={(event) => setSkipClearAsk(event.target.checked)} />
+              {pack.askClearSkip}
+            </label>
             <button
               type="button"
               className="btn"

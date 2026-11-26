@@ -467,6 +467,7 @@ export function InfoPane({ tracks }: { tracks: TrackVm[] }) {
   const expandAll = () => setClosed([])
   const collapseAll = () => setClosed([...INFO_SECTIONS])
   const rowPending = Boolean(row?.slow && analysis.loading)
+  const bpmRowPicked = single && row?.id === 'rhythm:BPM'
   const copyText = (value: string) => {
     void navigator.clipboard.writeText(value).catch(() => notify({ kind: 'err', text: pack.copyFail }))
   }
@@ -660,6 +661,18 @@ export function InfoPane({ tracks }: { tracks: TrackVm[] }) {
             <FileIcon />
             {pack.openFile}
           </ContextMenuItem>
+          {/* темп из анализа бывает в 2 раза меньше/больше настоящего (92.5 вместо 185): правка по строке BPM */}
+          {bpmRowPicked ? (
+            <>
+              <ContextMenuSeparator />
+              <ContextMenuItem disabled={!analysis.result || rowPending} onSelect={() => analysis.scaleBpm(2)}>
+                BPM × 2
+              </ContextMenuItem>
+              <ContextMenuItem disabled={!analysis.result || rowPending} onSelect={() => analysis.scaleBpm(0.5)}>
+                BPM ÷ 2
+              </ContextMenuItem>
+            </>
+          ) : null}
           <ContextMenuSeparator />
           <ContextMenuItem disabled={ctxSection === null} onSelect={() => ctxSection && toggle(ctxSection)}>
             <ChevronRightIcon size={14} className={ctxOpen ? 'info-chevron open' : 'info-chevron'} />

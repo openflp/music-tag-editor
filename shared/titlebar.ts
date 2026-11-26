@@ -12,8 +12,8 @@ export const TITLEBAR_SIDEBAR_TOGGLE_WIDTH_PX = 30
 /** Player toggle next to the sidebar toggle, always reserved in the titlebar. */
 export const TITLEBAR_PLAYER_TOGGLE_WIDTH_PX = 30
 export const TITLEBAR_OVERLAY_FALLBACK_PX = 138
-export const WINDOW_MIN_WIDTH = 900
-export const WINDOW_MIN_HEIGHT = 640
+export const WINDOW_MIN_WIDTH = 760
+export const WINDOW_MIN_HEIGHT = 560
 
 export const TITLEBAR_LEFT_ID = 'mte-titlebar-left'
 export const TITLEBAR_CENTER_ID = 'mte-titlebar-center'

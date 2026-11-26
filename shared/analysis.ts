@@ -28,6 +28,17 @@ export function roundBpm(value: number): number {
   return Math.round(value * 10) / 10
 }
 
+/**
+ * Большинство треков сведено на целом темпе (140, а не 139.9). Если оценка ближе чем на 0.25 BPM
+ * к целому — берём целое; дробные темпы (87.5, 128.4) остаются как есть.
+ */
+export function snapBpm(value: number): number {
+  const rounded = roundBpm(value)
+  if (!rounded) return 0
+  const whole = Math.round(rounded)
+  return Math.abs(rounded - whole) <= 0.25 ? whole : rounded
+}
+
 export function partsOf(raw: string): { key: string; scale: 'major' | 'minor' } {
   const text = raw.trim().replace(/♯/g, '#').replace(/♭/g, 'b')
   if (/^\d{1,2}[ab]$/i.test(text)) {

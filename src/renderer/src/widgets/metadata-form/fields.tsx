@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useRef, useState, type ChangeEvent, type KeyboardEvent, type ReactNode } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type ChangeEvent, type KeyboardEvent, type PointerEvent, type ReactNode } from 'react'
 import { Popover } from 'radix-ui'
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandSeparator } from '@/components/ui/command'
 import { Hint } from '@/components/ui/tooltip'
@@ -13,6 +13,8 @@ interface Counted {
   count: number
 }
 
+const NO_OPTIONS: Counted[] = []
+
 interface CompositeProps {
   label: string
   value: string
@@ -20,12 +22,13 @@ interface CompositeProps {
   disabled?: boolean
   onChange: (value: string) => void
   combo?: boolean
-  options?: Counted[]
+  /** Варианты «из файлов» считаются лениво — только когда список открывают, а не на каждый символ в поле. */
+  getOptions?: () => Counted[]
   history?: string[]
   multiline?: boolean
 }
 
-export function CompositeField({ label, value, mixed, disabled, onChange, combo, options = [], history = [], multiline }: CompositeProps) {
+export function CompositeField({ label, value, mixed, disabled, onChange, combo, getOptions, history = [], multiline }: CompositeProps) {
   const id = useId()
   const searchRef = useRef<HTMLInputElement>(null)
   const [open, setOpen] = useState(false)
@@ -37,10 +40,17 @@ export function CompositeField({ label, value, mixed, disabled, onChange, combo,
     if (open) setArmed(true)
   }, [open])
   const [query, setQuery] = useState('')
+  const [options, setOptions] = useState<Counted[]>(NO_OPTIONS)
   const fileValues = useMemo(() => options.map((item) => item.value), [options])
   const historyOptions = useMemo(() => historyChoices(history, fileValues, ''), [history, fileValues])
   const current = mixed ? '' : value
   const { pack } = useI18n()
+
+  const toggle = (next: boolean) => {
+    if (next && getOptions) setOptions(getOptions())
+    setOpen(next)
+    if (!next) setQuery('')
+  }
 
   const choose = (next: string) => {
     onChange(next)
@@ -57,7 +67,7 @@ export function CompositeField({ label, value, mixed, disabled, onChange, combo,
     onKeyDown: (event: KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>) => {
       if (!combo || event.key !== 'ArrowDown') return
       event.preventDefault()
-      setOpen(true)
+      toggle(true)
     }
   }
 
@@ -66,13 +76,7 @@ export function CompositeField({ label, value, mixed, disabled, onChange, combo,
       <label className="form-label" htmlFor={id}>
         <FadeText>{label}</FadeText>
       </label>
-      <Popover.Root
-        open={open}
-        onOpenChange={(next) => {
-          setOpen(next)
-          if (!next) setQuery('')
-        }}
-      >
+      <Popover.Root open={open} onOpenChange={toggle}>
         <Popover.Anchor asChild>
           <div className={multiline ? 'fld area' : 'fld'}>
             {multiline ? <textarea {...controlProps} /> : <input {...controlProps} />}
@@ -165,10 +169,51 @@ export function stepNumber(value: number | null, mixed: boolean, direction: 1 | 
   return next === 0 ? null : next
 }
 
-function StepButton({ less, disabled, onClick }: { less: boolean; disabled?: boolean; onClick: () => void }) {
+// зажатая кнопка повторяет шаг: пауза перед автоповтором, затем частые тики
+const HOLD_DELAY = 380
+const HOLD_TICK = 70
+
+function StepButton({ less, disabled, onStep }: { less: boolean; disabled?: boolean; onStep: () => void }) {
   const { pack } = useI18n()
+  // повтор всегда вызывает самый свежий обработчик: значение между тиками меняется
+  const latest = useRef(onStep)
+  latest.current = onStep
+  const delay = useRef(0)
+  const tick = useRef(0)
+  const stop = useCallback(() => {
+    window.clearTimeout(delay.current)
+    window.clearInterval(tick.current)
+  }, [])
+  useEffect(() => stop, [stop])
+  useEffect(() => {
+    if (disabled) stop()
+  }, [disabled, stop])
+
+  const start = (event: PointerEvent<HTMLButtonElement>) => {
+    if (disabled || event.button !== 0) return
+    event.currentTarget.setPointerCapture(event.pointerId)
+    stop()
+    latest.current()
+    delay.current = window.setTimeout(() => {
+      tick.current = window.setInterval(() => latest.current(), HOLD_TICK)
+    }, HOLD_DELAY)
+  }
+
   return (
-    <button type="button" className="year-step" aria-label={less ? pack.less : pack.moreNum} disabled={disabled} onClick={onClick}>
+    <button
+      type="button"
+      className="year-step"
+      aria-label={less ? pack.less : pack.moreNum}
+      disabled={disabled}
+      onPointerDown={start}
+      onPointerUp={stop}
+      onPointerCancel={stop}
+      onLostPointerCapture={stop}
+      // мышь/касание уже сработали на pointerdown; click без координат (detail 0) — это Enter/Space
+      onClick={(event) => {
+        if (event.detail === 0) latest.current()
+      }}
+    >
       {less ? <YearPrevIcon /> : <YearNextIcon />}
     </button>
   )
@@ -178,9 +223,9 @@ function SteppedNumber({ id, value, mixed, disabled, onChange, narrow, blank }: 
   const { pack } = useI18n()
   return (
     <div className={narrow ? 'fld stepped narrow' : 'fld stepped'} data-no-track-nav="">
-      <StepButton less disabled={disabled} onClick={() => onChange(stepNumber(value, mixed, -1, blank))} />
+      <StepButton less disabled={disabled} onStep={() => onChange(stepNumber(value, mixed, -1, blank))} />
       <NumberInput id={id} value={value} mixed={mixed} disabled={disabled} onChange={onChange} />
-      <StepButton less={false} disabled={disabled} onClick={() => onChange(stepNumber(value, mixed, 1, blank))} />
+      <StepButton less={false} disabled={disabled} onStep={() => onChange(stepNumber(value, mixed, 1, blank))} />
     </div>
   )
 }
