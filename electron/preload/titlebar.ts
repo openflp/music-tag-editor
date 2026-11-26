@@ -14,6 +14,27 @@ import {
   syncTitlebarOverlayVars
 } from '@shared/titlebar'
 
+// Кнопки окна на Windows рисует ОС (titleBarOverlay), оверлей диалога (rgba(0,0,0,.35)) их не затемняет.
+// На время диалога main перекрашивает overlay в тот цвет, который получился бы под оверлеем.
+const DIALOG_DIM_FACTOR = 0.65
+
+function dimHex(hex: string): string {
+  const match = /^#?([0-9a-f]{6})$/i.exec(hex.trim())
+  if (!match) return hex
+  const value = parseInt(match[1], 16)
+  const channel = (shift: number) =>
+    Math.round(((value >> shift) & 255) * DIALOG_DIM_FACTOR)
+      .toString(16)
+      .padStart(2, '0')
+  return `#${channel(16)}${channel(8)}${channel(0)}`
+}
+
+export function titlebarOverlayColors(dim: boolean): { color: string; symbolColor: string } {
+  return dim
+    ? { color: dimHex(TITLEBAR_BACKGROUND), symbolColor: dimHex(TITLEBAR_FOREGROUND) }
+    : { color: TITLEBAR_BACKGROUND, symbolColor: TITLEBAR_FOREGROUND }
+}
+
 function resolveTitlebarIconUrl(): string | undefined {
   try {
     const href = (globalThis as { location?: { href: string } }).location?.href

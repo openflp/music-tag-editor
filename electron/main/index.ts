@@ -279,7 +279,8 @@ async function createWindow(): Promise<void> {
     titleBarOverlay:
       process.platform === 'win32'
         ? {
-            color: TITLEBAR_BACKGROUND,
+            // прозрачный фон: кнопки окна рисует ОС поверх страницы, и непрозрачный цвет не затемняется оверлеем диалога
+            color: '#00000000',
             symbolColor: TITLEBAR_FOREGROUND,
             height: TITLEBAR_OVERLAY_HEIGHT
           }

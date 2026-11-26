@@ -65,6 +65,8 @@
   --ok-bg: rgba(42, 201, 127, 0.12);
   --sbw: 300px;
   --settings-gap: 10px;
+  /* титлбар (вместе с кнопками окна) ниже drag-overlay (100010) и диалогов (100020/100021) */
+  --z-titlebar: 100000;
   /* слои всплывающих элементов (диалоги — 100020/100021):
      меню и поповеры < подменю < подсказки */
   --z-pop: 100030;
@@ -165,6 +167,9 @@ textarea {
   font-family: Inter, Segoe UI, system-ui, sans-serif !important;
   line-height: 1 !important;
   -webkit-app-region: drag;
+  /* ниже диалогов; isolation — чтобы z-index кнопок окна не выходил за пределы титлбара */
+  z-index: var(--z-titlebar) !important;
+  isolation: isolate;
 }
 
 .cet-container {
@@ -1911,7 +1916,8 @@ label.menu-item { cursor: pointer; }
 
 .player {
   position: absolute;
-  z-index: 8;
+  /* над всем содержимым редактора; выше только тосты (31), меню (40) и модальные слои (50) */
+  z-index: 30;
   left: 8px;
   right: 8px;
   bottom: 8px;
@@ -2039,8 +2045,12 @@ label.menu-item { cursor: pointer; }
   color: var(--bg);
 }
 
-.player-play:hover,
+.player-play:hover:not(:disabled),
 .player-play.on { background: #fff; color: var(--bg); }
+
+/* disabled: вид не меняется при наведении (перебивает .icon-btn:disabled:hover и .player-play:hover) */
+.player .player-play:disabled,
+.player .player-play:disabled:hover { background: var(--text); color: var(--bg); }
 
 .player-seek {
   flex: 1 1 auto;
@@ -3358,7 +3368,7 @@ label.menu-item { cursor: pointer; }
   position: absolute;
   right: 8px;
   bottom: 8px;
-  z-index: 9;
+  z-index: 31;
   display: flex;
   width: min(340px, calc(100% - 16px));
   pointer-events: none;
@@ -7053,9 +7063,9 @@ kbd {
   .player-seek { gap: 6px; }
 }
 /* ── РАЗДЕЛИТЕЛЬ ПЕРЕД ШЕВРОНОМ ──────────────────────────────────
-   Та же тонкая линия, что .title-search-sep между поиском и кнопкой GitHub
-   в titlebar: 1×14px, цвет --field-line. Рисуем псевдоэлементом по левому
-   краю шеврона, чтобы не менять разметку CompositeField / select-триггеров.
+   Такой же, как у числовых полей «‹ 1 ›»: линия 1px цвета --field-line
+   во всю высоту поля, от рамки до рамки, без отступов. Рисуем псевдоэлементом
+   по левому краю шеврона, чтобы не менять разметку CompositeField / select-триггеров.
    Скрывается вместе с шевроном (display: none у узкого поля). */
 .fld .chevron {
   position: relative;
@@ -7065,10 +7075,9 @@ kbd {
   content: "";
   position: absolute;
   left: 0;
-  top: 50%;
+  top: 0;
+  bottom: 0;
   width: 1px;
-  height: 14px;
-  transform: translateY(-50%);
   background: var(--field-line);
   pointer-events: none;
 }

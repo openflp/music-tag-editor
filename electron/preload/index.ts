@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
-import { initCustomTitlebar } from './titlebar'
+import { initCustomTitlebar, titlebarOverlayColors } from './titlebar'
 import type { StoredRhythm } from '@shared/analysis'
 import type { LanguagePack } from '@shared/language-pack'
 import {
@@ -64,6 +64,9 @@ const api = {
   openRepository: (): Promise<void> => ipcRenderer.invoke(IPC.openRepository, REPOSITORY_URL),
   openIssues: (details: string): Promise<void> => ipcRenderer.invoke(IPC.openIssues, details),
   reloadWindow: (): Promise<void> => ipcRenderer.invoke(IPC.reloadWindow),
+  setTitlebarDim: (dim: boolean): void => {
+    ipcRenderer.send('mte:titlebar-overlay', titlebarOverlayColors(dim))
+  },
   setLocale: (locale: 'ru' | 'en'): Promise<void> => ipcRenderer.invoke(IPC.setLocale, locale),
   getAppSettings: (): Promise<AppSettingsSnapshot> => ipcRenderer.invoke(IPC.getAppSettings),
   setAppSettings: (patch: Partial<AppSettings>): Promise<AppSettingsSnapshot> => ipcRenderer.invoke(IPC.setAppSettings, patch),
