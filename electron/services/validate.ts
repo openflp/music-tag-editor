@@ -1,6 +1,7 @@
 import { statSync } from 'node:fs'
 import { extname, resolve } from 'node:path'
-import { AUDIO_EXTENSIONS, IMAGE_EXTENSIONS, ISSUES_URL, MAX_COVER_BYTES, MAX_FILES, MAX_LYRICS_CHARS, MENU_BAR_MODES, REPOSITORY_URL, ZOOM_STEPS, type AppSettings, type CoverArt, type MenuBarMode, type RhythmWrite, type WriteJob, type ZoomStep } from '@shared/types'
+import { releasePageUrl } from '@shared/update'
+import { AUDIO_EXTENSIONS, IMAGE_EXTENSIONS, ISSUES_URL, MAX_COVER_BYTES, MAX_FILES, MAX_LYRICS_CHARS, MENU_BAR_MODES, RELEASES_URL, REPOSITORY_URL, ZOOM_STEPS, type AppSettings, type CoverArt, type MenuBarMode, type RhythmWrite, type WriteJob, type ZoomStep } from '@shared/types'
 
 const AUDIO = new Set<string>(AUDIO_EXTENSIONS)
 const IMAGES = new Set<string>(IMAGE_EXTENSIONS)
@@ -40,6 +41,18 @@ export function assertRepositoryUrl(value: unknown): string {
   return REPOSITORY_URL
 }
 
+export function assertReleasesUrl(value: unknown): string {
+  if (value !== RELEASES_URL) throw new InputError('Некорректная ссылка')
+  return RELEASES_URL
+}
+
+export function assertReleaseTag(value: unknown): string {
+  if (typeof value !== 'string') throw new InputError('Некорректная ссылка')
+  const url = releasePageUrl(value)
+  if (!url) throw new InputError('Некорректная ссылка')
+  return url
+}
+
 const ISSUES_PATH = '/openflp/music-tag-editor/issues/new'
 
 export function issueReportUrl(value: unknown, title: string): string {
@@ -75,7 +88,7 @@ export function assertPathList(value: unknown): string[] {
   return value.map((item) => assertStringPath(item))
 }
 
-const ACCELERATOR = /^(CmdOrCtrl\+)?(Alt\+)?(Shift\+)?([A-Z0-9]|Delete|Backspace|Space|Home|End|Up|Down|Left|Right|F([1-9]|1[0-2]))$/
+const ACCELERATOR = /^(CmdOrCtrl\+)?(Alt\+)?(Shift\+)?([A-Z0-9]|Delete|Backspace|Enter|Space|Home|End|Up|Down|Left|Right|F([1-9]|1[0-2]))$/
 
 const APP_FLAGS = ['hardwareAcceleration', 'backgroundThrottling', 'spellcheck', 'openAtLogin', 'alwaysOnTop', 'restoreBounds'] as const
 

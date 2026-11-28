@@ -1,11 +1,14 @@
 import { forwardRef, type ComponentProps, type ForwardRefExoticComponent, type RefAttributes } from 'react'
 import {
   IconAlertOctagon,
+  IconBadge,
   IconAlertTriangle,
   IconArrowBackUp,
   IconArrowForwardUp,
   IconArrowLeft,
   IconArrowRight,
+  IconArrowsMaximize,
+  IconArrowsMinimize,
   IconArrowsShuffle,
   IconCalendarPlus,
   IconCheck,
@@ -27,32 +30,41 @@ import {
   IconFilePlus,
   IconFilter,
   IconBrandGithub,
+  IconBug,
   IconFolder,
   IconFolderShare,
   IconHash,
   IconHelp,
+  IconKeyboard,
   IconHourglass,
   IconInfoCircle,
   IconLayoutBottombarCollapse,
   IconLayoutBottombarExpand,
   IconLayoutSidebarLeftCollapse,
   IconLayoutSidebarLeftExpand,
+  IconLayoutGrid,
   IconList,
   IconLoader2,
+  IconLogout,
   IconMusic,
+  IconNotes,
   IconPhoto,
+  IconPin,
   IconPlayerPauseFilled,
   IconPlayerPlayFilled,
   IconPlayerStopFilled,
   IconPlayerSkipBackFilled,
   IconPlayerSkipForwardFilled,
   IconPlus,
+  IconPlaylistX,
   IconRefresh,
+  IconReload,
   IconRestore,
   IconRepeat,
   IconRepeatOnce,
   IconSearch,
   IconSelectAll,
+  IconTextCaption,
   IconSelector,
   IconSettings,
   IconSortAscendingLetters,
@@ -62,7 +74,10 @@ import {
   IconUser,
   IconVolume,
   IconVolumeOff,
-  IconX
+  IconX,
+  IconZoomIn,
+  IconZoomOut,
+  IconZoomReset
 } from '@tabler/icons-react'
 
 /** Толщина контура. Одно значение на весь набор. */
@@ -125,6 +140,8 @@ export const SelectAllIcon = icon(IconSelectAll)
 export const UndoIcon = icon(IconArrowBackUp)
 export const RedoIcon = icon(IconArrowForwardUp)
 export const RestoreIcon = icon(IconRestore)
+export const ExpandIcon = icon(IconArrowsMaximize)
+export const ShrinkIcon = icon(IconArrowsMinimize)
 export const CoverIcon = icon(IconPhoto)
 export const UploadIcon = icon(IconUpload, 30)
 export const ImportIcon = icon(IconUpload)
@@ -170,6 +187,19 @@ export const MenuIcon = forwardRef<SVGSVGElement, Omit<AppIconProps, 'size' | 's
     </svg>
   )
 })
+export const ClearListIcon = icon(IconPlaylistX)
+export const QuitIcon = icon(IconLogout)
+export const PinIcon = icon(IconPin)
+export const ZoomInIcon = icon(IconZoomIn)
+export const ZoomOutIcon = icon(IconZoomOut)
+export const ZoomResetIcon = icon(IconZoomReset)
+export const ReloadIcon = icon(IconReload)
+export const KeyboardIcon = icon(IconKeyboard)
+export const BugIcon = icon(IconBug)
+export const SectionsIcon = icon(IconLayoutGrid)
+export const NotesIcon = icon(IconNotes)
+export const LyricsIcon = icon(IconTextCaption)
+export const BadgeIcon = icon(IconBadge)
 export const CircleCheckIcon = icon(IconCircleCheck)
 export const InfoIcon = icon(IconInfoCircle)
 export const OctagonXIcon = icon(IconAlertOctagon)

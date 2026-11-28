@@ -5,7 +5,7 @@ import { copyFile, readFile, stat, writeFile } from 'node:fs/promises'
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, nativeTheme, screen, session, shell, utilityProcess, type UtilityProcess } from 'electron'
 import { packFor, type LocaleId } from '@shared/i18n'
 import { parseLanguagePack } from '@shared/language-pack'
-import { IPC, REPOSITORY_URL, type AppSettings, type HistoryMap, type MenuCommand, type TrackSnapshot, type WriteJob, type WriteResult } from '@shared/types'
+import { IPC, REPOSITORY_URL, type AppSettings, type HistoryMap, type MenuCommand, type NativeShortcuts, type TrackSnapshot, type WriteJob, type WriteResult } from '@shared/types'
 import { readStoredRhythm } from '../services/rhythm'
 import { TITLEBAR_BACKGROUND, TITLEBAR_FOREGROUND, TITLEBAR_OVERLAY_HEIGHT, WINDOW_MIN_HEIGHT, WINDOW_MIN_WIDTH } from '@shared/titlebar'
 import { installMediaProtocol, registerMediaScheme } from './media'
@@ -15,7 +15,8 @@ import { readTracks } from '../services/library'
 import { readAppSettings, readBounds, readHistory, pushHistory, writeAppSettings, writeBounds } from '../services/settings'
 import { coverKey, readCoverOnly, readTrack, writeTrack } from '../services/tag-io'
 import { orderWrites } from '@shared/filename'
-import { assertAccelerator, assertAppSettings, assertAudioFilePath, assertCloseConfirm, assertCoverInput, assertDirectoryPath, assertDragFiles, assertPathList, assertRepositoryUrl, assertTextExport, assertWriteJob, assertWriteJobs, extensionForMime, isImagePath, issueReportUrl, mimeFromImagePath } from '../services/validate'
+import { fetchVersions } from '../services/updates'
+import { assertAccelerator, assertAppSettings, assertAudioFilePath, assertCloseConfirm, assertCoverInput, assertDirectoryPath, assertDragFiles, assertPathList, assertReleaseTag, assertReleasesUrl, assertRepositoryUrl, assertTextExport, assertWriteJob, assertWriteJobs, extensionForMime, isImagePath, issueReportUrl, mimeFromImagePath } from '../services/validate'
 import { MAX_COVER_BYTES, type CoverArt } from '@shared/types'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -106,7 +107,15 @@ function L() {
   return packFor(locale)
 }
 
-let accelerators = { open: 'CmdOrCtrl+O', save: 'CmdOrCtrl+S', undo: 'CmdOrCtrl+Z', redo: 'CmdOrCtrl+Y' }
+let accelerators: NativeShortcuts = {
+  open: 'CmdOrCtrl+O',
+  folder: 'CmdOrCtrl+Shift+O',
+  openFile: 'CmdOrCtrl+Enter',
+  formatBadges: 'CmdOrCtrl+Shift+F',
+  save: 'CmdOrCtrl+S',
+  undo: 'CmdOrCtrl+Z',
+  redo: 'CmdOrCtrl+Y'
+}
 
 function sendMenu(command: MenuCommand): void {
   win?.webContents.send(IPC.menu, command)
@@ -126,13 +135,13 @@ function macTemplate(text: ReturnType<typeof L>): Electron.MenuItemConstructorOp
       label: text.file,
       submenu: [
         cmd(text.openFiles, 'open', accelerators.open),
-        cmd(text.openFolder, 'folder'),
+        cmd(text.openFolder, 'folder', accelerators.folder),
         sep,
         cmd(text.writeTags, 'save', accelerators.save),
         cmd(text.refresh, 'refresh'),
         sep,
         cmd(text.revealFile, 'reveal'),
-        cmd(text.openFile, 'openFile'),
+        cmd(text.openFile, 'openFile', accelerators.openFile),
         sep,
         cmd(text.removeOne, 'remove'),
         cmd(text.clearList, 'clear'),
@@ -161,6 +170,8 @@ function macTemplate(text: ReturnType<typeof L>): Electron.MenuItemConstructorOp
         // TODO: подпись «показать/скрыть» зависит от состояния renderer — нужен отдельный IPC
         cmd(text.showList, 'toggleSidebar'),
         cmd(text.showPlayer, 'togglePlayer'),
+        cmd(text.settingsFormatBadges, 'formatBadges', accelerators.formatBadges),
+        cmd(text.play, 'play'),
         sep,
         cmd(text.prevFile, 'prev'),
         cmd(text.nextFile, 'next'),
@@ -176,12 +187,12 @@ function macTemplate(text: ReturnType<typeof L>): Electron.MenuItemConstructorOp
           ]
         },
         sep,
-        { role: 'resetZoom', label: text.nativeZoom },
-        { role: 'zoomIn', label: text.nativeZoomIn },
-        { role: 'zoomOut', label: text.nativeZoomOut },
+        cmd(text.nativeZoomIn, 'zoomIn'),
+        cmd(text.nativeZoomOut, 'zoomOut'),
+        cmd(text.nativeZoom, 'zoomReset'),
         { role: 'togglefullscreen' },
         sep,
-        { role: 'reload', label: text.nativeReload },
+        cmd(text.nativeReload, 'reload'),
         { role: 'toggleDevTools', label: text.nativeDevtools }
       ]
     },
@@ -189,6 +200,7 @@ function macTemplate(text: ReturnType<typeof L>): Electron.MenuItemConstructorOp
     {
       role: 'help',
       submenu: [
+        cmd(text.settingsShortcuts, 'helpShortcuts'),
         { label: text.github, click: () => void shell.openExternal(REPOSITORY_URL) },
         { label: text.crashReport, click: () => void shell.openExternal(issueReportUrl('', text.crashTitle)) }
       ]
@@ -207,6 +219,11 @@ function buildMenu(): void {
       label: text.file,
       submenu: [
         { label: text.nativeOpen, accelerator: accelerators.open || undefined, click: () => sendMenu('open') },
+        { label: text.openFolder, accelerator: accelerators.folder || undefined, click: () => sendMenu('folder') },
+        { label: text.openFile, accelerator: accelerators.openFile || undefined, click: () => sendMenu('openFile') },
+        { label: text.settingsFormatBadges, accelerator: accelerators.formatBadges || undefined, click: () => sendMenu('formatBadges') },
+        { label: text.play, click: () => sendMenu('play') },
+        { type: 'separator' },
         { label: text.writeTags, accelerator: accelerators.save || undefined, click: () => sendMenu('save') },
         { type: 'separator' },
         { label: text.nativeUndo, accelerator: accelerators.undo || undefined, click: () => sendMenu('undo') },
@@ -214,18 +231,18 @@ function buildMenu(): void {
         { label: text.nativePrev, click: () => sendMenu('prev') },
         { label: text.nativeNext, click: () => sendMenu('next') },
         { type: 'separator' },
-        { role: 'quit', label: text.nativeQuit }
+        { label: text.nativeQuit, click: () => sendMenu('quit') }
       ]
     },
     {
       label: text.view,
       submenu: [
-        { role: 'reload', label: text.nativeReload },
+        { label: text.nativeReload, click: () => sendMenu('reload') },
         { role: 'toggleDevTools', label: text.nativeDevtools },
         { type: 'separator' },
-        { role: 'resetZoom', label: text.nativeZoom },
-        { role: 'zoomIn', label: text.nativeZoomIn },
-        { role: 'zoomOut', label: text.nativeZoomOut }
+        { label: text.nativeZoom, click: () => sendMenu('zoomReset') },
+        { label: text.nativeZoomIn, click: () => sendMenu('zoomIn') },
+        { label: text.nativeZoomOut, click: () => sendMenu('zoomOut') }
       ]
     }
   ]
@@ -715,6 +732,18 @@ function registerIpc(): void {
     await shell.openExternal(assertRepositoryUrl(payload))
   })
 
+  ipcMain.handle(IPC.openReleases, async (_event, payload: unknown) => {
+    await shell.openExternal(assertReleasesUrl(payload))
+  })
+
+  ipcMain.handle(IPC.openRelease, async (_event, payload: unknown) => {
+    await shell.openExternal(assertReleaseTag(payload))
+  })
+
+  ipcMain.handle(IPC.appVersion, () => app.getVersion())
+
+  ipcMain.handle(IPC.checkUpdates, async () => ({ current: app.getVersion(), versions: await fetchVersions() }))
+
   ipcMain.handle(IPC.openIssues, async (_event, payload: unknown) => {
     await shell.openExternal(issueReportUrl(payload, L().crashTitle))
   })
@@ -736,6 +765,9 @@ function registerIpc(): void {
     const item = payload as Record<string, unknown>
     accelerators = {
       open: assertAccelerator(item.open),
+      folder: assertAccelerator(item.folder),
+      openFile: assertAccelerator(item.openFile),
+      formatBadges: assertAccelerator(item.formatBadges),
       save: assertAccelerator(item.save),
       undo: assertAccelerator(item.undo),
       redo: assertAccelerator(item.redo)

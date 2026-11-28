@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useEditor, type Toast as ToastModel } from '@/features/editor/model/store'
 import { AlertIcon, CheckIcon, CloseIcon } from '@/shared/ui/icons'
 import { tr, useI18n } from '@/shared/i18n'
@@ -37,7 +38,7 @@ export function Toast() {
   if (!shown) return null
   const ok = shown.kind === 'ok'
   const leaving = !toast
-  return (
+  return createPortal(
     <div className="toasts">
       <div
         ref={cardRef}
@@ -58,6 +59,7 @@ export function Toast() {
         </button>
         <span key={shown.id} className="toast-bar" />
       </div>
-    </div>
+    </div>,
+    document.body
   )
 }

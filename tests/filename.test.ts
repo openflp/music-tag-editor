@@ -40,6 +40,10 @@ describe('filename mask', () => {
     expect(applyMask('%label% %title%', tags, 'C:/music/a.mp3', undefined, { label: 'Live' })).toBe('Live Ночь')
   })
 
+  it('leaves a switched-off token in the name', () => {
+    expect(resolveTarget('C:/music/a.mp3', tags, { mask: '%artist% - %title%', directory: '', off: ['artist'] })).toBe('C:/music/%artist% - Ночь.mp3')
+  })
+
   it('strips characters a file name cannot contain', () => {
     expect(applyMask('%title%', { ...tags, title: 'a/b:c' }, 'C:/music/a.mp3')).toBe('a b c')
   })

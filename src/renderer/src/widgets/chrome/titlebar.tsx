@@ -16,7 +16,7 @@ import {
 import { useEditor } from '@/features/editor/model/store'
 import { copyTracks } from '@/features/editor/lib/copy'
 import { Hint } from '@/components/ui/tooltip'
-import { ArrowLeftIcon, ArrowRightIcon, CheckIcon, CopyIcon, FileIcon, FilePlusIcon, FolderIcon, FolderOutIcon, GithubIcon, MenuIcon, MoreIcon, PauseIcon, PlayIcon, PlayerToggleIcon, RefreshStopIcon, RestoreIcon, SearchIcon, SelectAllIcon, SettingsIcon, SidebarIcon, TrashIcon, UndoIcon, RedoIcon } from '@/shared/ui/icons'
+import { ArrowLeftIcon, ArrowRightIcon, BadgeIcon, BugIcon, CheckIcon, ChevronDownIcon, ChevronUpIcon, ClearListIcon, CopyIcon, FileIcon, FilePlusIcon, FolderIcon, FolderOutIcon, GithubIcon, InfoIcon, KeyboardIcon, LyricsIcon, MenuIcon, MoreIcon, NoteIcon, NotesIcon, PauseIcon, PinIcon, PlayIcon, PlayerToggleIcon, QuitIcon, RefreshStopIcon, ReloadIcon, RestoreIcon, SearchIcon, SectionsIcon, SelectAllIcon, SettingsIcon, SidebarIcon, TrashIcon, UndoIcon, RedoIcon, ZoomInIcon, ZoomOutIcon, ZoomResetIcon } from '@/shared/ui/icons'
 import { TITLEBAR_CENTER_ID, TITLEBAR_LEFT_ID, TITLEBAR_RIGHT_ID, ensureTitlebarRegions } from '@shared/titlebar'
 import { packTitlebarMenuOverflow } from '@/widgets/chrome/menu-overflow'
 import { setAppSetting, useAppSettings } from '@/features/settings/app-settings'
@@ -102,11 +102,11 @@ const MENU_GAP_PX = 2
 const NAV_GAP_PX = 8
 
 const SHEET_MENU = [
-  { id: 'main', label: 'tabMain', shortcut: 'tabMain' },
-  { id: 'note', label: 'tabNote', shortcut: 'tabNote' },
-  { id: 'lyrics', label: 'tabLyrics', shortcut: 'tabLyrics' },
-  { id: 'detail', label: 'tabInfo', shortcut: 'tabInfo' },
-  { id: 'file', label: 'tabFile', shortcut: 'tabFile' }
+  { id: 'main', label: 'tabMain', shortcut: 'tabMain', Icon: NoteIcon },
+  { id: 'note', label: 'tabNote', shortcut: 'tabNote', Icon: NotesIcon },
+  { id: 'lyrics', label: 'tabLyrics', shortcut: 'tabLyrics', Icon: LyricsIcon },
+  { id: 'detail', label: 'tabInfo', shortcut: 'tabInfo', Icon: InfoIcon },
+  { id: 'file', label: 'tabFile', shortcut: 'tabFile', Icon: FileIcon }
 ] as const
 
 type MenuChrome = {
@@ -217,6 +217,7 @@ function MenuItems({ id, onPalette, sidebarOpen, onToggleSidebar, playerOpen, on
             <span aria-hidden={loading}>{pack.refresh}</span>
             <span aria-hidden={!loading}>{pack.stopLoad}</span>
           </span>
+          <MenuKey id="refresh" />
         </MenubarItem>
         <MenubarSeparator />
         <MenubarItem disabled={noSelection} onSelect={() => void revealCurrent()}>
@@ -226,6 +227,7 @@ function MenuItems({ id, onPalette, sidebarOpen, onToggleSidebar, playerOpen, on
         <MenubarItem disabled={noSelection} onSelect={() => void openCurrent()}>
           <FileIcon />
           {pack.openFile}
+          <MenuKey id="openFile" />
         </MenubarItem>
         <MenubarSeparator />
         <MenubarItem disabled={noSelection || busy} onSelect={() => removeSelected()}>
@@ -234,10 +236,16 @@ function MenuItems({ id, onPalette, sidebarOpen, onToggleSidebar, playerOpen, on
           <MenuKey id="remove" />
         </MenubarItem>
         <MenubarItem disabled={noTracks && !loading} onSelect={requestClear}>
+          <ClearListIcon />
           {pack.clearList}
+          <MenuKey id="clear" />
         </MenubarItem>
         <MenubarSeparator />
-        <MenubarItem onSelect={requestClose}>{pack.nativeQuit}</MenubarItem>
+        <MenubarItem onSelect={requestClose}>
+          <QuitIcon />
+          {pack.nativeQuit}
+          <MenuKey id="quit" />
+        </MenubarItem>
       </>
     )
   }
@@ -290,17 +298,31 @@ function MenuItems({ id, onPalette, sidebarOpen, onToggleSidebar, playerOpen, on
           <MenuKey id="settings" />
         </MenubarItem>
         <MenubarSeparator />
-        <MenubarItem onSelect={onToggleSidebar}>{sidebarOpen ? pack.hideList : pack.showList}</MenubarItem>
-        <MenubarItem onSelect={onTogglePlayer}>{playerOpen ? pack.hidePlayer : pack.showPlayer}</MenubarItem>
+        <MenubarItem onSelect={onToggleSidebar}>
+          <SidebarIcon off={!sidebarOpen} />
+          {sidebarOpen ? pack.hideList : pack.showList}
+          <MenuKey id="sidebar" />
+        </MenubarItem>
+        <MenubarItem onSelect={onTogglePlayer}>
+          <PlayerToggleIcon off={!playerOpen} />
+          {playerOpen ? pack.hidePlayer : pack.showPlayer}
+          <MenuKey id="player" />
+        </MenubarItem>
         <MenubarCheckboxItem checked={showFormat} onCheckedChange={(value) => setShowFormatBadges(value === true)}>
+          <BadgeIcon />
           {pack.settingsFormatBadges}
+          <MenuKey id="formatBadges" />
         </MenubarCheckboxItem>
         <MenubarSeparator />
         <MenubarSub>
-          <MenubarSubTrigger>{pack.sections}</MenubarSubTrigger>
+          <MenubarSubTrigger>
+            <SectionsIcon />
+            {pack.sections}
+          </MenubarSubTrigger>
           <MenubarSubContent className="mte-menubar-content">
             {SHEET_MENU.map((item) => (
               <MenubarItem key={item.id} onSelect={() => window.dispatchEvent(new CustomEvent('mte-sheet-tab', { detail: item.id }))}>
+                <item.Icon />
                 {pack[item.label]}
                 <MenuKey id={item.shortcut} />
               </MenubarItem>
@@ -318,10 +340,12 @@ function MenuItems({ id, onPalette, sidebarOpen, onToggleSidebar, playerOpen, on
     return (
       <>
         <MenubarItem disabled={noTracks} onSelect={() => selectDelta(-1)}>
+          <ChevronUpIcon />
           {pack.prevFile}
           <MenubarShortcut>↑</MenubarShortcut>
         </MenubarItem>
         <MenubarItem disabled={noTracks} onSelect={() => selectDelta(1)}>
+          <ChevronDownIcon />
           {pack.nextFile}
           <MenubarShortcut>↓</MenubarShortcut>
         </MenubarItem>
@@ -337,33 +361,55 @@ function MenuItems({ id, onPalette, sidebarOpen, onToggleSidebar, playerOpen, on
         <MenubarItem disabled={!currentPath || currentBroken} onSelect={() => currentPath && requestPlay(currentPath)}>
           {currentPlaying ? <PauseIcon /> : <PlayIcon />}
           {currentPlaying ? pack.pause : pack.play}
+          <MenuKey id="play" />
         </MenubarItem>
         <MenubarSeparator />
         <MenubarCheckboxItem checked={onTop} onCheckedChange={(value) => setAppSetting('alwaysOnTop', value === true)}>
+          <PinIcon />
           {pack.settingsOnTop}
+          <MenuKey id="onTop" />
         </MenubarCheckboxItem>
         <MenubarItem disabled={zoomIndex <= 0} onSelect={() => stepZoom(-1)}>
+          <ZoomOutIcon />
           {pack.nativeZoomOut}
+          <MenuKey id="zoomOut" />
         </MenubarItem>
         <MenubarItem disabled={zoomIndex < 0 || zoomIndex >= ZOOM_STEPS.length - 1} onSelect={() => stepZoom(1)}>
+          <ZoomInIcon />
           {pack.nativeZoomIn}
+          <MenuKey id="zoomIn" />
         </MenubarItem>
         <MenubarItem disabled={zoom === 1} onSelect={() => setAppSetting('zoom', 1 satisfies ZoomStep)}>
+          <ZoomResetIcon />
           {pack.nativeZoom}
+          <MenuKey id="zoomReset" />
         </MenubarItem>
         <MenubarSeparator />
-        <MenubarItem onSelect={() => void window.musicTagEditor?.reloadWindow()}>{pack.nativeReload}</MenubarItem>
+        <MenubarItem onSelect={() => void window.musicTagEditor?.reloadWindow()}>
+          <ReloadIcon />
+          {pack.nativeReload}
+          <MenuKey id="reload" />
+        </MenubarItem>
       </>
     )
   }
   return (
     <>
-      <MenubarItem onSelect={() => openSettings('shortcuts')}>{pack.settingsShortcuts}</MenubarItem>
+      <MenubarItem onSelect={() => openSettings('shortcuts')}>
+        <KeyboardIcon />
+        {pack.settingsShortcuts}
+        <MenuKey id="helpShortcuts" />
+      </MenubarItem>
       <MenubarItem onSelect={() => void window.musicTagEditor?.openRepository()}>
         <GithubIcon />
         {pack.github}
+        <MenuKey id="github" />
       </MenubarItem>
-      <MenubarItem onSelect={() => void window.musicTagEditor?.openIssues('')}>{pack.crashReport}</MenubarItem>
+      <MenubarItem onSelect={() => void window.musicTagEditor?.openIssues('')}>
+        <BugIcon />
+        {pack.crashReport}
+        <MenuKey id="report" />
+      </MenubarItem>
     </>
   )
 }
@@ -543,10 +589,12 @@ function MenuBar(chrome: MenuChrome) {
 
 function SidebarToggle({ open, onToggle }: { open: boolean; onToggle: () => void }) {
   const { pack } = useI18n()
+  const chord = useShortcut('sidebar')
   const label = open ? pack.hideList : pack.showList
+  const tip = chord ? `${label} · ${formatChord(chord)}` : label
   return (
-    <Hint label={label}>
-      <button type="button" className="icon-btn" aria-label={label} aria-pressed={open} onClick={onToggle}>
+    <Hint label={tip}>
+      <button type="button" className="icon-btn" aria-label={label} aria-keyshortcuts={ariaChord(chord) || undefined} aria-pressed={open} onClick={onToggle}>
         <SidebarIcon off={!open} />
       </button>
     </Hint>
@@ -555,10 +603,12 @@ function SidebarToggle({ open, onToggle }: { open: boolean; onToggle: () => void
 
 function PlayerToggle({ open, onToggle }: { open: boolean; onToggle: () => void }) {
   const { pack } = useI18n()
+  const chord = useShortcut('player')
   const label = open ? pack.hidePlayer : pack.showPlayer
+  const tip = chord ? `${label} · ${formatChord(chord)}` : label
   return (
-    <Hint label={label}>
-      <button type="button" className="icon-btn" aria-label={label} aria-pressed={open} onClick={onToggle}>
+    <Hint label={tip}>
+      <button type="button" className="icon-btn" aria-label={label} aria-keyshortcuts={ariaChord(chord) || undefined} aria-pressed={open} onClick={onToggle}>
         <PlayerToggleIcon off={!open} />
       </button>
     </Hint>
@@ -613,7 +663,7 @@ function TitleSearch({ onPalette }: { onPalette: () => void }) {
 }
 
 function isSettingsSection(value: unknown): value is SettingsSection {
-  return value === 'language' || value === 'shortcuts' || value === 'operators' || value === 'writing' || value === 'playback' || value === 'system'
+  return value === 'language' || value === 'shortcuts' || value === 'operators' || value === 'writing' || value === 'playback' || value === 'system' || value === 'updates'
 }
 
 function SettingsButton() {

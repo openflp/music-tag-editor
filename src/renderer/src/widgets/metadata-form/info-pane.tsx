@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { baseName, formatBadge, formatBitrate, formatBytes, formatDuration, formatRate, formatStamp } from '@/entities/track/lib'
 import { useEditor, type TrackVm } from '@/features/editor/model/store'
 import { displayKey } from '@shared/analysis'
@@ -9,6 +9,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSepara
 import { Hint } from '@/components/ui/tooltip'
 import { IconGripVertical } from '@tabler/icons-react'
 import { AxisScroll } from '@/shared/ui/axis-scroll'
+import { Collapse } from '@/shared/ui/collapse'
 import { CheckIcon, ChevronRightIcon, CopyIcon, DownloadIcon, FileIcon, FolderOutIcon, MoreIcon } from '@/shared/ui/icons'
 import { useAudioAnalysis } from '@/features/analysis/use-audio-analysis'
 import { getPack, menuLocaleOf, useI18n } from '@/shared/i18n'
@@ -428,6 +429,9 @@ export function InfoPane({ tracks }: { tracks: TrackVm[] }) {
   const [closed, setClosed] = useState(readClosed)
   const [dragId, setDragId] = useState<InfoSectionId | null>(null)
   const [overId, setOverId] = useState<InfoSectionId | null>(null)
+  // блоки с анимацией сообщают, что высота устоялась: прокрутка и тени пересчитываются
+  const [settle, setSettle] = useState(0)
+  const bumpSettle = useCallback(() => setSettle((count) => count + 1), [])
   const items = useMemo(() => rowsOf(tracks, menuLocaleOf(locale)), [tracks, locale])
   const sections = useMemo(() => {
     const grouped = new Map<InfoSectionId, InfoRow[]>(INFO_SECTIONS.map((id) => [id, []]))
@@ -522,7 +526,7 @@ export function InfoPane({ tracks }: { tracks: TrackVm[] }) {
         </div>
       </div>
       <ContextMenu onOpenChange={(open) => { if (!open) setRowKey(null) }}>
-        <AxisScroll className="info-scroll" watch={`${tracks.length}:${items.length}:${order.join()}:${closed.join()}`} shade>
+        <AxisScroll className="info-scroll" watch={`${tracks.length}:${items.length}:${order.join()}:${closed.join()}:${settle}`} shade>
           {(ref) => (
             <ContextMenuTrigger asChild>
               <div
@@ -607,26 +611,26 @@ export function InfoPane({ tracks }: { tracks: TrackVm[] }) {
                           <IconGripVertical size={16} stroke={2} aria-hidden="true" />
                         </button>
                       </div>
-                      {open
-                        ? section.rows.map((item) => {
-                            const key = item.id
-                            const pending = Boolean(item.slow && analysis.loading)
-                            const ready = !pending && canCopy(item.copy, pack.mixedShort)
-                            return (
-                              <div
-                                className={rowKey === key ? 'prop-row active' : 'prop-row'}
-                                key={key}
-                                onContextMenu={() => setRowKey(key)}
-                              >
-                                <span>{item.label}</span>
-                                <b>
-                                  {pending ? <span className="info-spinner" role="status" aria-label={pack.reading} /> : item.value || '—'}
-                                  {ready ? <CopyButton text={item.copy} label={pack.copyItem(item.label)} /> : null}
-                                </b>
-                              </div>
-                            )
-                          })
-                        : null}
+                      <Collapse open={open} innerClassName="info-section-body" onSettled={bumpSettle}>
+                        {section.rows.map((item) => {
+                          const key = item.id
+                          const pending = Boolean(item.slow && analysis.loading)
+                          const ready = !pending && canCopy(item.copy, pack.mixedShort)
+                          return (
+                            <div
+                              className={rowKey === key ? 'prop-row active' : 'prop-row'}
+                              key={key}
+                              onContextMenu={() => setRowKey(key)}
+                            >
+                              <span>{item.label}</span>
+                              <b>
+                                {pending ? <span className="info-spinner" role="status" aria-label={pack.reading} /> : item.value || '—'}
+                                {ready ? <CopyButton text={item.copy} label={pack.copyItem(item.label)} /> : null}
+                              </b>
+                            </div>
+                          )
+                        })}
+                      </Collapse>
                     </section>
                   )
                 })}

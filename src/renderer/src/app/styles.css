@@ -72,6 +72,8 @@
   --z-pop: 100030;
   --z-pop-sub: 100031;
   --z-tip: 100040;
+  /* тост выше command и окна настроек (диалоги 100021), ниже меню и подсказок */
+  --z-toast: 100025;
   font-family: Inter, Segoe UI, system-ui, sans-serif;
   font-size: 13px;
   line-height: 1.35;
@@ -274,6 +276,12 @@ textarea {
   overflow: hidden;
 }
 
+/* Linux: кнопки окна рисует cet (внутри #mte-titlebar-right), а cet.css даёт им margin-left: auto,
+   из-за чего они отрываются от правой группы. Прижимаем вплотную: flex-end уже стоит. */
+#mte-titlebar-right .cet-window-controls {
+  margin-left: 0;
+}
+
 #mte-titlebar-menu-host {
   display: flex;
   align-items: flex-start;
@@ -323,7 +331,8 @@ textarea {
   align-items: center;
   gap: 2px;
   height: 24px;
-  -webkit-app-region: no-drag;
+  /* промежуток между кнопками — зона перетаскивания окна, no-drag только у самих кнопок */
+  -webkit-app-region: drag;
 }
 
 .title-file-nav .icon-btn {
@@ -616,7 +625,22 @@ textarea {
 }
 
 .mte-menubar-content [data-slot="menubar-item"] svg,
-.mte-menubar-content [data-slot="menubar-sub-trigger"] svg { color: var(--muted); }
+.mte-menubar-content [data-slot="menubar-sub-trigger"] svg,
+.mte-menubar-content [data-slot="menubar-checkbox-item"] svg { color: var(--muted); }
+
+.mte-menubar-content [data-slot="menubar-checkbox-item"] { position: relative; padding-right: 32px; }
+
+.mte-menubar-content .mte-menu-tick {
+  position: absolute;
+  top: 50%;
+  right: 10px;
+  display: flex;
+  width: 16px;
+  height: 16px;
+  align-items: center;
+  justify-content: center;
+  transform: translateY(-50%);
+}
 
 .mte-menubar-content [data-slot="menubar-item"]:focus,
 .mte-menubar-content [data-slot="menubar-item"][data-highlighted],
@@ -632,13 +656,17 @@ textarea {
 
 .mte-menubar-content [data-slot="menubar-item"][data-highlighted] svg,
 .mte-menubar-content [data-slot="menubar-sub-trigger"][data-highlighted] svg,
+.mte-menubar-content [data-slot="menubar-checkbox-item"][data-highlighted] svg,
 .mte-menubar-content [data-slot="menubar-item"]:focus svg,
-.mte-menubar-content [data-slot="menubar-sub-trigger"]:focus svg {
+.mte-menubar-content [data-slot="menubar-sub-trigger"]:focus svg,
+.mte-menubar-content [data-slot="menubar-checkbox-item"]:focus svg {
   color: var(--on-accent);
 }
 
 .mte-menubar-content [data-slot="menubar-item"][data-highlighted] [data-slot="menubar-shortcut"],
-.mte-menubar-content [data-slot="menubar-item"]:focus [data-slot="menubar-shortcut"] {
+.mte-menubar-content [data-slot="menubar-item"]:focus [data-slot="menubar-shortcut"],
+.mte-menubar-content [data-slot="menubar-checkbox-item"][data-highlighted] [data-slot="menubar-shortcut"],
+.mte-menubar-content [data-slot="menubar-checkbox-item"]:focus [data-slot="menubar-shortcut"] {
   color: rgb(4 33 29 / 0.72);
 }
 
@@ -3365,17 +3393,17 @@ label.menu-item { cursor: pointer; }
 .progress::-moz-progress-bar { background: var(--link); }
 
 .toasts {
-  position: absolute;
+  position: fixed;
   right: 8px;
   bottom: 8px;
-  z-index: 31;
+  z-index: var(--z-toast);
   display: flex;
   width: min(340px, calc(100% - 16px));
   pointer-events: none;
   transition: bottom 240ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
-.editor:has(.player:not(.player-off)) .toasts {
+body:has(.player:not(.player-off)) .toasts {
   bottom: calc(8px + 54px + 8px);
 }
 
@@ -3412,7 +3440,8 @@ label.menu-item { cursor: pointer; }
 
 .toast-copy strong { display: block; font-weight: 600; }
 
-.toast .icon-btn { width: 24px; height: 24px; }
+/* крестик той же высоты, что круглая иконка слева (28px), — центры совпадают */
+.toast .icon-btn { width: 28px; height: 28px; }
 
 .toast-bar {
   position: absolute;
@@ -4309,11 +4338,12 @@ label.menu-item { cursor: pointer; }
 
 .settings-nav-item {
   box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
   height: 32px;
   margin: 0;
   padding: 0 10px;
   border: 0;
-  
   background: transparent;
   text-align: left;
 }
@@ -4369,9 +4399,8 @@ label.menu-item { cursor: pointer; }
 
 .settings-page-head h3 {
   margin: 0;
+  min-width: 0;
   padding: 0;
-  
-  
   line-height: 16px;
   
   
@@ -5135,6 +5164,7 @@ label.menu-item { cursor: pointer; }
   min-height: 32px;
   padding: 2px 6px 2px 4px;
   background: rgb(255 255 255 / 0.035);
+  transition: background-color 0.14s ease;
 }
 
 .info-section + .info-section > .info-section-head,
@@ -5229,6 +5259,10 @@ label.menu-item { cursor: pointer; }
 
 /* нижний разделитель у последнего пункта (и у закрытого, и у открытого) */
 .info-pane .prop-table > .info-section:last-child { border-bottom: 1px solid var(--line); }
+
+/* строки раздела лежат внутри Collapse и больше не соседи заголовка: линию под ним рисует первая строка
+   (при сворачивании её скрывает overflow: hidden у обёртки) */
+.info-pane .info-scroll .info-section-body > .prop-row:first-child { border-top: 1px solid var(--line); }
 
 /* значения можно выделять мышью: глобально стоит * { user-select: none } */
 .info-pane .prop-row b {
@@ -5527,15 +5561,97 @@ kbd {
 .settings-list .settings-token,
 .settings-list .settings-field { width: 100%; }
 
+.settings-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  overflow: hidden;
+  table-layout: fixed;
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-card);
+  background: rgb(255 255 255 / 0.05);
+}
+
+.settings-table th,
+.settings-table td {
+  padding: 8px 10px;
+  text-align: left;
+  font-size: 13px;
+  font-weight: 400;
+  vertical-align: middle;
+}
+
+.settings-table th {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.settings-table tbody td { border-top: 1px solid var(--line); }
+
+.settings-table tbody tr { height: 40px; }
+
+.settings-table tbody tr:hover { background: rgb(255 255 255 / 0.08); }
+
+.settings-table .col-fit { width: 52px; }
+
+.settings-table .col-note { width: 140px; }
+
+.settings-table .clip {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.settings-table code { font-family: inherit; color: var(--link); }
+
+.settings-table tr.is-off code,
+.settings-table tr.is-off td { color: var(--muted); }
+
+.settings-table td.note { color: var(--muted); font-size: 12px; }
+
+.settings-tag {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: var(--r-pill);
+  background: var(--ok-bg);
+  color: var(--ok);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.settings-tag.bad { background: var(--danger-bg); color: var(--danger); }
+
+.settings-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.settings-name .clip { min-width: 0; }
+
+.settings-table td:has(.icon-btn) { text-align: right; }
+
+.settings-version {
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
 /* ── 3. заголовки: обычный регистр, без разрядки ── */
 .settings-kicker {
-  padding: 4px 4px 0;
+  padding: 4px 14px 0;
   font-size: 12px;
   letter-spacing: 0;
   text-transform: none;
 }
 
 .settings-page-head h3 {
+  padding-left: 14px; /* по линии текста внутри блоков */
   font-size: 13px;
   font-weight: 600;
   letter-spacing: 0;
@@ -6564,6 +6680,22 @@ kbd {
   translate: 0 var(--press-shift);
 }
 
+/* строки таблицы «Информация» — нажатие */
+.info-pane .prop-row {
+  --press-scale: var(--press-scale-wide);
+  transition:
+    background-color 0.14s ease,
+    scale var(--press-dur) var(--press-ease) var(--press-delay),
+    translate var(--press-dur) var(--press-ease) var(--press-delay);
+}
+
+.info-pane .prop-row:active:not(:has(button:active)) {
+  --press-dur: 0.05s;
+  --press-delay: 0s;
+  scale: var(--press-scale);
+  translate: 0 var(--press-shift);
+}
+
 /* во время перетаскивания строки эффект нажатия не нужен */
 .track-row.dragging {
   scale: 1;
@@ -6676,7 +6808,11 @@ kbd {
 .hist-value,
 .menu-file,
 .info-section-toggle span,
-.diff-label {
+.diff-label,
+.settings-nav-item,
+.settings-page-head h3,
+.settings-table .clip,
+.ops-list .clip {
   scrollbar-width: none;
   overscroll-behavior-x: contain;
   -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 var(--fade-l), #000 calc(100% - var(--fade-r)), transparent 100%);
@@ -6697,7 +6833,11 @@ kbd {
 .hist-value::-webkit-scrollbar,
 .menu-file::-webkit-scrollbar,
 .info-section-toggle span::-webkit-scrollbar,
-.diff-label::-webkit-scrollbar { display: none; }
+.diff-label::-webkit-scrollbar,
+.settings-nav-item::-webkit-scrollbar,
+.settings-page-head h3::-webkit-scrollbar,
+.settings-table .clip::-webkit-scrollbar,
+.ops-list .clip::-webkit-scrollbar { display: none; }
 
 /* все эти элементы: одна строка, не помещается — прокручивается и гаснет в тень */
 .head-meta,
@@ -6711,7 +6851,11 @@ kbd {
 .hist-value,
 .menu-file,
 .info-section-toggle span,
-.diff-label {
+.diff-label,
+.settings-nav-item,
+.settings-page-head h3,
+.settings-table .clip,
+.ops-list .clip {
   overflow-x: auto;
   overflow-y: hidden;
   text-overflow: clip;
@@ -6730,7 +6874,11 @@ kbd {
   .hist-value,
   .menu-file,
   .info-section-toggle span,
-  .diff-label { mask-image: none; -webkit-mask-image: none; animation: none; }
+  .diff-label,
+  .settings-nav-item,
+  .settings-page-head h3,
+  .settings-table .clip,
+  .ops-list .clip { mask-image: none; -webkit-mask-image: none; animation: none; }
 
   /* head-meta занимает всю ширину колонки, поэтому статичная тень у края безопасна */
   .head-meta {
@@ -7134,30 +7282,762 @@ kbd {
    Селекторы: триггеры ContextMenu (data-slot="context-menu-trigger" ставит
    shadcn) и кнопки .title-file-nav в titlebar. Для другой кнопки достаточно
    добавить ей класс .no-shift. */
-:is(button[data-slot="context-menu-trigger"], .title-file-nav .icon-btn, .no-shift) {
+:is(button[data-slot="context-menu-trigger"], .title-file-nav .icon-btn, .no-shift, .icon-btn[aria-expanded]:not([aria-haspopup])) {
   --press-scale: 1;
   --press-shift: 0px;
 }
 
 /* обычное нажатие (левая кнопка мыши): вспышка фона и пульс иконки вместо сдвига */
-:is(button[data-slot="context-menu-trigger"], .title-file-nav .icon-btn, .no-shift):not(:disabled):active {
+:is(button[data-slot="context-menu-trigger"], .title-file-nav .icon-btn, .no-shift, .icon-btn[aria-expanded]:not([aria-haspopup])):not(:disabled):active {
   background: rgb(255 255 255 / 0.12);
   color: var(--text);
 }
 
-:is(button[data-slot="context-menu-trigger"], .title-file-nav .icon-btn, .no-shift) svg {
+:is(button[data-slot="context-menu-trigger"], .title-file-nav .icon-btn, .no-shift, .icon-btn[aria-expanded]:not([aria-haspopup])) svg {
   transition: scale var(--press-dur) var(--press-ease) var(--press-delay);
 }
 
-:is(button[data-slot="context-menu-trigger"], .title-file-nav .icon-btn, .no-shift):not(:disabled):active svg {
+:is(button[data-slot="context-menu-trigger"], .title-file-nav .icon-btn, .no-shift, .icon-btn[aria-expanded]:not([aria-haspopup])):not(:disabled):active svg {
   scale: 0.78;
 }
 
 /* правая кнопка: меню открылось — та же одноразовая вспышка + пульс, что у «+» */
-:is(button[data-slot="context-menu-trigger"], .title-file-nav .icon-btn, .no-shift)[data-state="open"] {
+:is(button[data-slot="context-menu-trigger"], .title-file-nav .icon-btn, .no-shift, .icon-btn[aria-expanded]:not([aria-haspopup]))[data-state="open"] {
   animation: press-flash 0.3s ease-out;
 }
 
-:is(button[data-slot="context-menu-trigger"], .title-file-nav .icon-btn, .no-shift)[data-state="open"] svg {
+:is(button[data-slot="context-menu-trigger"], .title-file-nav .icon-btn, .no-shift, .icon-btn[aria-expanded]:not([aria-haspopup]))[data-state="open"] svg {
   animation: press-icon 0.3s ease-out;
 }
+
+/* Кнопки «Отменить» / «Вернуть» (.icon-btn с aria-expanded, без aria-haspopup) открывают список истории
+   по правому клику. Список позиционируется по рамке кнопки, поэтому сама кнопка не должна
+   масштабироваться и сдвигаться при нажатии (выше они добавлены в :is(...) с .no-shift).
+   Состояние «открыто» у них приходит через aria-expanded, а не data-state — играем ту же вспышку. */
+.icon-btn[aria-expanded="true"]:not([aria-haspopup]) {
+  animation: press-flash 0.3s ease-out;
+}
+
+.icon-btn[aria-expanded="true"]:not([aria-haspopup]) svg {
+  animation: press-icon 0.3s ease-out;
+}
+
+
+/* ════════════════════════════════════════════════════════════════
+   НАСТРОЙКИ: карточка-список с панелью действий, операторы, текст в контролах
+   ════════════════════════════════════════════════════════════════ */
+
+/* ── 1. текст по вертикали ──
+   Шрифт даёт глифам визуальный центр выше геометрического, поэтому текст
+   в кнопках и «клавише» казался приподнятым. Сдвигаем его вниз на
+   --settings-text-nudge: padding-top вдвое больше, т.к. контент центрируется. */
+.settings-window {
+  --settings-text-nudge: 1px;
+}
+
+.settings-window .settings-key {
+  padding-top: calc(var(--settings-text-nudge) * 2);
+  padding-bottom: 0;
+  line-height: 1;
+}
+
+/* Кнопки .btn («Загрузить пакет», «Сохранить образец» и др.): без оптического сдвига.
+   Иконка и текст — flex-элементы одной строки с align-items: center, поэтому лежат
+   на одной горизонтальной оси; padding-top/margin-top здесь только разводили их. */
+.settings-window .btn,
+.settings-window .btn.primary,
+.settings-window .btn.ghost {
+  padding-top: 0;
+  padding-bottom: 0;
+  line-height: 1;
+}
+
+.settings-window .btn > svg {
+  margin: 0;
+  align-self: center;
+}
+
+/* ── 2. иконка «Проверить» крутится во время проверки ── */
+.settings-spin {
+  animation: settings-spin 0.9s linear infinite;
+  transform-box: fill-box;
+  transform-origin: center;
+  will-change: transform;
+}
+
+.settings-window .btn:has(.settings-spin) { contain: layout paint; }
+
+@keyframes settings-spin { to { transform: rotate(360deg); } }
+
+/* ── 3. карточка-список: сверху панель действий, ниже список/таблица ── */
+.settings-card {
+  overflow: hidden;
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-card);
+  background: rgb(255 255 255 / 0.05);
+}
+
+.settings-card-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-height: 48px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+/* таблица внутри карточки — без собственной рамки и фона */
+.settings-card > .settings-table {
+  border: 0;
+  border-radius: 0;
+  background: none;
+}
+
+.settings-card > .settings-table tbody tr:last-child td { border-bottom: 0; }
+
+/* форма добавления оператора растягивается на всю панель */
+.settings-card-bar > .settings-add { flex: 1; min-width: 0; gap: 12px; }
+
+/* ── 4. аккордеон: hover заголовка обрезается по скруглению карточки ── */
+.settings-acc {
+  overflow: hidden;
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-card);
+  background: rgb(255 255 255 / 0.05);
+  font-size: 13px;
+}
+
+.settings-acc-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 44px;
+  margin: 0;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 0; /* скругляет контейнер (overflow: hidden), а не сам заголовок */
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+  user-select: none;
+  transition: background-color 0.14s ease;
+}
+
+.settings-acc-head:hover { background: rgb(255 255 255 / 0.08); }
+
+.settings-acc-head:focus-visible {
+  outline: 2px solid var(--link);
+  outline-offset: -2px;
+}
+
+.settings-acc-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-acc-body {
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--line);
+}
+
+/* панель действий внутри аккордеона отделена от списка линией — как в .settings-card */
+.settings-acc-body > .settings-card-bar { border-bottom: 1px solid var(--line); }
+
+/* ── 5. операторы: единые отступы и колонки ── */
+.settings-ops { --settings-gap: 8px; }
+
+/* список: те же 14px по бокам, что у строк и панели действий */
+.ops-list { margin: 0; padding: 0 14px; list-style: none; }
+
+.ops-list li {
+  display: grid;
+  grid-template-columns: 140px minmax(0, 1fr) 24px;
+  align-items: center;
+  gap: 12px;
+  min-height: 40px;
+}
+
+.ops-list li + li { border-top: 1px solid var(--line); }
+
+.ops-list code { font-family: inherit; color: var(--link); }
+
+.ops-list .clip {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  color: var(--muted);
+}
+
+.ops-list .icon-btn { width: 24px; height: 24px; }
+
+/* первое поле формы по ширине совпадает с колонкой кода в списке */
+.settings-acc .settings-card-bar .settings-input:not(.grow) { width: 140px; }
+
+.settings-acc .settings-input { font-size: 13px; }
+
+/* заголовок группы и подсказки выровнены по тексту внутри карточек */
+.settings-ops > .settings-kicker { margin-top: 8px; padding: 0 14px; }
+
+.settings-ops > .settings-hint,
+.settings-page > .settings-hint { padding: 0 14px; }
+
+.settings-card-bar.split {
+  flex-wrap: nowrap;
+  justify-content: space-between;
+}
+
+.settings-card-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.ops-list li.is-off code,
+.ops-list li.is-off .clip { color: var(--muted); }
+
+@media (prefers-reduced-motion: reduce) {
+  .settings-spin { animation-duration: 2.4s; }
+}
+
+/* ── настройки: подсказки в (?), счётчики в кружке, подсветка поиска ── */
+.settings-row-copy .settings-row-title {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.settings-row-copy .settings-row-title .hint-host { display: inline-flex; }
+
+.settings-row-title label { cursor: inherit; }
+
+.settings-help {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  color: var(--faint);
+}
+
+.settings-help:hover { color: var(--text); }
+
+.settings-page-title {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.settings-page-title .hint-host { display: inline-flex; }
+
+.settings-count {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  box-sizing: border-box;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: var(--r-pill);
+  background: rgb(255 255 255 / 0.08);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.settings-nav-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.settings-nav-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-nav-item.on .settings-count {
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
+  color: var(--text);
+}
+
+.settings-mark {
+  padding: 0 1px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--accent) 38%, transparent);
+  color: inherit;
+}
+
+/* кнопки «Загрузить пакет» / «Сохранить образец»: расстояние между иконкой и текстом */
+.settings-card-tools .btn {
+  gap: 6px;
+  padding-left: 12px;
+  padding-right: 14px;
+}
+
+/* редактирование своего оператора: те же колонки, что у строки списка */
+.ops-list li.ops-edit { display: block; padding: 6px 0; }
+
+.ops-edit form {
+  display: grid;
+  grid-template-columns: 140px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+}
+
+.ops-edit .settings-input { width: 100%; min-width: 0; font-size: 13px; }
+
+.ops-edit-actions { display: flex; align-items: center; gap: 2px; }
+
+/* заголовки «Свои» / «Встроенные»: нажатие сжимает только содержимое, фон hover остаётся на месте */
+.settings-acc-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  --press-scale: var(--press-scale-wide);
+  transition:
+    scale var(--press-dur) var(--press-ease) var(--press-delay),
+    translate var(--press-dur) var(--press-ease) var(--press-delay);
+}
+
+.settings-acc-head:active .settings-acc-label {
+  --press-dur: 0.05s;
+  --press-delay: 0s;
+  scale: var(--press-scale);
+  translate: 0 var(--press-shift);
+}
+
+/* плавное «растворение» блоков (аккордеоны, группа операторов): высота, прозрачность и размытие */
+.settings-collapse {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  filter: blur(6px);
+  transition:
+    grid-template-rows 260ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    margin-top 260ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    opacity 220ms ease,
+    filter 260ms ease;
+}
+
+.settings-collapse[data-open="true"] {
+  grid-template-rows: 1fr;
+  opacity: 1;
+  filter: blur(0);
+}
+
+.settings-collapse > div {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* свёрнутый блок не оставляет за собой промежуток страницы */
+.settings-ops > .settings-collapse[data-open="false"] { margin-top: calc(var(--settings-gap) * -1); }
+
+.settings-bar svg.settings-app-icon { color: var(--text-2); }
+
+/* заголовок окна: «Настройки — вкладка» или «Настройки — «запрос» · найдено» */
+.settings-bar [data-slot="dialog-title"] {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-bar-sub { color: var(--muted); font-weight: 500; }
+
+/* ════════════════════════════════════════════════════════════════
+   НАСТРОЙКИ: раскладка как у основного окна —
+   вкладки в скруглённой боковой панели (как .sidebar),
+   содержимое в скруглённой панели справа (как .editor), между ними зазор
+   ════════════════════════════════════════════════════════════════ */
+.settings-bar { border-bottom: 0; }
+
+.settings-split {
+  box-sizing: border-box;
+  gap: 4px;
+  padding: 1px 4px 4px;
+}
+
+.settings-side {
+  box-sizing: border-box;
+  overflow: hidden;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 20px; /* 24px окна − 4px отступа: углы концентричны */
+}
+
+.settings-main {
+  box-sizing: border-box;
+  border: 1px solid var(--field-line);
+  border-radius: 20px;
+}
+
+/* ручка ширины лежит в зазоре между панелями */
+.settings-resizer {
+  left: calc(var(--settings-side) + 2px);
+  width: 8px;
+}
+
+/* вкладки настроек: стекло, как у правой панели */
+.settings-side { background: transparent; }
+
+/* вкладки настроек = выбранный элемент и hover в sidebar (.track-row) */
+.settings-nav-item { border-radius: 12px; }
+
+.settings-nav-item:not(.on):hover { background: rgba(255, 255, 255, 0.05); }
+
+.settings-nav-item.on,
+.settings-nav-item.on:hover {
+  background: var(--accent);
+  box-shadow: none;
+  color: var(--on-accent);
+}
+
+.settings-nav-item.on .settings-count {
+  background: rgb(4 33 29 / 0.16);
+  color: var(--on-accent);
+}
+
+
+/* ════════════════════════════════════════════════════════════════
+   НАСТРОЙКИ: единая сетка (идёт последним и перекрывает прежние правки)
+
+   Скругления — три уровня:
+     панель 20px (концентрична окну 24px − зазор 4px)
+     карточка 16px (--r-card)
+     контрол 10px (--r-ctl); мелкая иконка-кнопка 24px — 7px (--r-btn-sm)
+   Отступы — сетка 4px:
+     зазор между блоками 8px, поля панели 12px, внутренний отступ карточек 16px
+   Высоты:
+     контрол 28px, пункт списка 40px, строка / заголовок / панель действий 44px
+   ════════════════════════════════════════════════════════════════ */
+.settings-window {
+  --sg-r-panel: 20px;
+  --sg-r-card: var(--r-card);
+  --sg-r-ctl: var(--r-ctl);
+  --sg-r-sm: var(--r-btn-sm);
+  --sg-gap: 8px;
+  --sg-gutter: 12px;
+  --sg-pad: 16px;
+  --sg-ctl-h: 28px;
+  --sg-item-h: 40px;
+  --sg-row-h: 44px;
+  --settings-gap: var(--sg-gap);
+}
+
+/* ── панели ── */
+.settings-window .settings-side,
+.settings-window .settings-main {
+  border: 1px solid var(--hairline);
+  border-radius: var(--sg-r-panel);
+}
+
+/* ── боковая панель: поиск и вкладки ── */
+.settings-window .settings-search {
+  height: var(--sg-ctl-h);
+  margin: var(--sg-gap);
+  border-radius: var(--sg-r-ctl);
+}
+
+.settings-window .settings-nav { padding: var(--sg-gap); }
+.settings-window .settings-nav-item { border-radius: var(--sg-r-ctl); }
+
+/* ── заголовок страницы и поля прокрутки ── */
+.settings-window .settings-page-head {
+  height: var(--sg-row-h);
+  min-height: var(--sg-row-h);
+  padding: 0 var(--sg-gutter);
+}
+
+.settings-window .settings-page-head h3 { padding-left: var(--sg-pad); }
+.settings-window .settings-page-head .icon-btn { width: var(--sg-ctl-h); height: var(--sg-ctl-h); }
+.settings-window .settings-scroll-body { padding: 0 var(--sg-gutter) var(--sg-gutter); }
+
+/* ── карточки: строки-переключатели, списки, таблицы, аккордеоны ── */
+.settings-window .settings-page > .settings-row {
+  min-height: var(--sg-row-h);
+  padding: 6px var(--sg-pad);
+}
+
+.settings-window .settings-page > .settings-row:not(.settings-row + .settings-row) { border-radius: var(--sg-r-card) var(--sg-r-card) 0 0; }
+.settings-window .settings-page > .settings-row:not(:has(+ .settings-row)) { border-radius: 0 0 var(--sg-r-card) var(--sg-r-card); }
+.settings-window .settings-page > .settings-row:not(.settings-row + .settings-row):not(:has(+ .settings-row)) { border-radius: var(--sg-r-card); }
+
+.settings-window .settings-list,
+.settings-window .settings-table,
+.settings-window .settings-card,
+.settings-window .settings-acc { border-radius: var(--sg-r-card); }
+
+/* разделители идут от края до края карточки; отступ держит сама строка */
+.settings-window .settings-list {
+  padding: 0;
+  overflow: hidden;
+}
+
+.settings-window .settings-list > li {
+  min-height: var(--sg-item-h);
+  padding: 0 var(--sg-pad);
+}
+
+.settings-window .settings-card-bar {
+  min-height: var(--sg-row-h);
+  padding: 8px var(--sg-pad);
+}
+
+.settings-window .settings-acc-head {
+  min-height: var(--sg-row-h);
+  padding: 0 var(--sg-pad);
+}
+
+.settings-window .ops-list { padding: 0; }
+
+.settings-window .ops-list li {
+  min-height: var(--sg-item-h);
+  padding: 0 var(--sg-pad);
+}
+
+.settings-window .ops-list li.ops-edit { padding: 6px var(--sg-pad); }
+
+/* ── таблицы: те же боковые отступы, что у карточек ── */
+.settings-window .settings-table th,
+.settings-window .settings-table td { padding: 0 8px; }
+
+.settings-window .settings-table th { height: 36px; }
+.settings-window .settings-table tbody tr { height: var(--sg-item-h); }
+
+.settings-window .settings-table th:first-child,
+.settings-window .settings-table td:first-child { padding-left: var(--sg-pad); }
+
+.settings-window .settings-table th:last-child,
+.settings-window .settings-table td:last-child { padding-right: var(--sg-pad); }
+
+.settings-window .settings-table .col-fit { width: calc(24px + var(--sg-pad) + 8px); }
+.settings-window .settings-table .col-base { width: 148px; }
+.settings-window .settings-table .icon-btn { width: 24px; height: 24px; }
+
+/* текст ячейки сам не прокручивается: за это отвечает вложенный .clip */
+.settings-window .settings-table td .clip { display: block; line-height: 1.35; }
+
+/* ── выбор языка: строка целиком — переключатель ── */
+/* ── контролы ── */
+.settings-window .settings-input,
+.settings-window .settings-key,
+.settings-window .settings-step,
+.settings-window .settings-select[data-slot="select-trigger"],
+.settings-window .btn { border-radius: var(--sg-r-ctl); }
+
+.settings-window .settings-row-copy .settings-help,
+.settings-window .ops-list .icon-btn,
+.settings-window .ops-edit .icon-btn { border-radius: var(--sg-r-sm); }
+
+.settings-mark { border-radius: 4px; }
+
+/* ── подписи под карточками ── */
+.settings-window .settings-ops > .settings-hint,
+.settings-window .settings-page > .settings-hint { padding: 0 var(--sg-pad); }
+
+.settings-window .settings-kicker { padding: 4px var(--sg-pad) 0; }
+.settings-window .settings-ops > .settings-kicker { margin-top: var(--sg-gap); padding: 0 var(--sg-pad); }
+
+/* ── список языков: тянуть можно за любое свободное место строки ── */
+.settings-window .lang-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.settings-window .lang-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) 24px;
+  align-items: center;
+  column-gap: 12px;
+  min-height: 52px;
+  padding: 6px var(--sg-pad);
+  cursor: grab;
+  touch-action: none;
+  outline: none;
+  transition: background-color 0.14s ease;
+}
+
+.settings-window .lang-row + .lang-row { border-top: 1px solid var(--line); }
+.settings-window .lang-row:hover { background: rgb(255 255 255 / 0.06); }
+.settings-window .lang-row:focus-visible { box-shadow: inset 0 0 0 2px var(--link); }
+
+.settings-window .lang-grip {
+  display: grid;
+  place-items: center;
+  color: var(--faint);
+  transition: color 0.14s ease;
+}
+
+.settings-window .lang-row:hover .lang-grip { color: var(--text-2); }
+
+.settings-window .lang-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.settings-window .lang-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.settings-window .lang-name,
+.settings-window .lang-base {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-window .lang-name { color: var(--text); font-size: 13px; font-weight: 500; line-height: 18px; }
+.settings-window .lang-base { color: var(--muted); font-size: 12px; font-weight: 400; line-height: 16px; }
+
+.settings-window .lang-row .icon-btn {
+  width: 24px;
+  height: 24px;
+  border-radius: var(--sg-r-sm);
+  cursor: pointer;
+}
+
+/* поднятая строка выше остальных; остальные уступают ей место плавно */
+.settings-window .lang-row.lifted {
+  z-index: 2;
+  cursor: grabbing;
+  background: color-mix(in srgb, #fff 10%, var(--card));
+  box-shadow: 0 6px 18px rgb(0 0 0 / 0.4), inset 0 0 0 1px var(--hairline-strong);
+}
+
+.settings-window .lang-row.shifting,
+.settings-window .lang-row.lifted.settling {
+  transition: transform 160ms cubic-bezier(0.2, 0.8, 0.2, 1), background-color 0.14s ease;
+}
+
+.settings-window .lang-row.lifted * { cursor: grabbing; }
+
+/* ── шапка окна настроек: кнопка «развернуть» ── */
+.settings-bar [data-slot="dialog-title"] { flex: 1 1 auto; }
+.settings-bar .settings-close { margin-left: 0; }
+
+.settings-max svg { animation: settings-max-pop 260ms cubic-bezier(0.2, 0.9, 0.3, 1.3) both; }
+
+@keyframes settings-max-pop {
+  from { opacity: 0; transform: scale(0.6) rotate(-12deg); }
+  to { opacity: 1; transform: none; }
+}
+
+/* окно плавно растёт до размеров приложения и так же возвращается */
+[data-slot="dialog-content"].settings-window {
+  transition:
+    width 300ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    max-width 300ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    height 300ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+/* окно живёт только под titlebar (34px): по центру оставшейся области и не выше неё */
+.settings-window {
+  --sg-title: 34px;
+  --sg-edge: 12px;
+}
+
+/* центрирование через margin: auto, а не translate(-50%): половина пикселя в transform
+   размывала текст и иконки (особенно пока окно растёт при развороте) */
+[data-slot="dialog-content"].settings-window {
+  inset: var(--sg-title) 0 0 0;
+  margin: auto;
+  translate: none !important;
+  height: min(500px, calc(100% - var(--sg-title) - var(--sg-edge) * 2));
+  max-height: calc(100% - var(--sg-title) - var(--sg-edge) * 2);
+}
+
+/* после появления анимация не держит слой: окно рисуется как обычный элемент */
+[data-slot="dialog-content"].settings-window[data-state="open"] { animation-fill-mode: backwards; }
+
+[data-slot="dialog-content"].settings-window.is-max {
+  width: calc(100% - var(--sg-edge) * 2);
+  max-width: calc(100% - var(--sg-edge) * 2);
+  height: calc(100% - var(--sg-title) - var(--sg-edge) * 2);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-slot="dialog-content"].settings-window,
+  .settings-window .lang-row.shifting,
+  .settings-window .lang-row.lifted.settling { transition: none; }
+  .settings-max svg { animation: none; }
+}
+
+/* ── типографика окна настроек: одна шкала на все вкладки ──
+   14/20 заголовок окна · 15/20 заголовок страницы · 13/18 основной текст и названия
+   12/16 пояснения, шапки таблиц, подписи · контролы 13 (клавиши 12) */
+.settings-window {
+  font-size: 13px;
+  line-height: 18px;
+  letter-spacing: 0;
+  -webkit-font-smoothing: antialiased;
+}
+
+.settings-bar [data-slot="dialog-title"] { font-size: 14px; line-height: 20px; font-weight: 600; }
+.settings-window .settings-page-head h3 { font-size: 15px; line-height: 20px; font-weight: 600; letter-spacing: 0; }
+
+.settings-window .settings-nav-item { font-size: 13px; line-height: 18px; font-weight: 500; }
+
+.settings-window .settings-row-copy b,
+.settings-window .settings-row-copy .settings-row-title { font-size: 13px; line-height: 18px; font-weight: 500; }
+
+.settings-window .settings-row-copy > span:not(.settings-row-title) { font-size: 12px; line-height: 16px; font-weight: 400; color: var(--muted); }
+
+.settings-window .settings-shortcut,
+.settings-window .ops-list li,
+.settings-window .settings-table td { font-size: 13px; line-height: 18px; font-weight: 400; }
+
+.settings-window .settings-table td.note { font-size: 12px; line-height: 16px; }
+
+.settings-window .settings-table th,
+.settings-window .settings-kicker { font-size: 12px; line-height: 16px; font-weight: 600; letter-spacing: 0; }
+
+.settings-window .settings-hint { font-size: 12px; line-height: 16px; }
+
+.settings-window .settings-key {
+  min-width: 120px;
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.settings-window .settings-key.on { color: var(--text); }
+
+.settings-window .settings-input,
+.settings-window .settings-select[data-slot="select-trigger"],
+.settings-window .btn { font-size: 13px; font-weight: 500; }
+
+.settings-window .settings-select[data-slot="select-trigger"] { font-weight: 400; }
+.settings-window .settings-input { font-weight: 400; }
+
+.settings-window .ops-list code,
+.settings-window .settings-table code { font-size: 13px; font-variant-ligatures: none; }

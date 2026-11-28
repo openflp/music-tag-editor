@@ -257,7 +257,8 @@ function planState(state: Pick<EditorState, 'tracks' | 'selected' | 'applyAll' |
       selected: state.selected,
       start: getPrefs().numberStart,
       width: getPrefs().numberWidth,
-      tokens: planTokens()
+      tokens: planTokens(),
+      off: getPrefs().builtinOff
     }
   })
 }

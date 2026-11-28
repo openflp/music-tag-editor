@@ -1,9 +1,13 @@
 import { useSyncExternalStore } from 'react'
+import type { NativeShortcuts } from '@shared/types'
 import { isMac } from '@/shared/lib/platform'
 
 export const SHORTCUTS = [
   { id: 'open', def: 'Ctrl+O' },
   { id: 'folder', def: 'Ctrl+Shift+O' },
+  { id: 'openFile', def: 'Ctrl+Enter' },
+  { id: 'formatBadges', def: 'Ctrl+Shift+F' },
+  { id: 'play', def: 'Space' },
   { id: 'save', def: 'Ctrl+S' },
   { id: 'undo', def: 'Ctrl+Z' },
   { id: 'redo', def: isMac ? 'Ctrl+Shift+Z' : 'Ctrl+Y' },
@@ -19,7 +23,20 @@ export const SHORTCUTS = [
   { id: 'tabFile', def: 'Ctrl+4' },
   { id: 'selectAll', def: 'Ctrl+A' },
   { id: 'copyFiles', def: 'Ctrl+C' },
-  { id: 'remove', def: isMac ? 'Ctrl+Backspace' : 'Delete' }
+  { id: 'remove', def: isMac ? 'Ctrl+Backspace' : 'Delete' },
+  { id: 'sidebar', def: 'Ctrl+B' },
+  { id: 'player', def: 'Ctrl+Shift+B' },
+  { id: 'refresh', def: 'F5' },
+  { id: 'clear', def: 'Ctrl+Shift+W' },
+  { id: 'quit', def: 'Ctrl+Q' },
+  { id: 'onTop', def: 'Ctrl+Shift+T' },
+  { id: 'zoomIn', def: 'Ctrl++' },
+  { id: 'zoomOut', def: 'Ctrl+-' },
+  { id: 'zoomReset', def: 'Ctrl+0' },
+  { id: 'reload', def: 'Ctrl+R' },
+  { id: 'helpShortcuts', def: 'F1' },
+  { id: 'github', def: 'Ctrl+Shift+G' },
+  { id: 'report', def: 'Ctrl+Shift+U' }
 ] as const
 
 export type ShortcutId = (typeof SHORTCUTS)[number]['id']
@@ -28,12 +45,15 @@ export interface CustomToken {
   id: string
   name: string
   value: string
+  enabled: boolean
 }
 
 interface Prefs {
   numberStart: number
   numberWidth: number
+  builtinOff: string[]
   tokens: CustomToken[]
+  checkUpdates: boolean
   shortcuts: Partial<Record<ShortcutId, string>>
   confirmWrite: boolean
   confirmClose: boolean
@@ -42,6 +62,7 @@ interface Prefs {
   rememberVolume: boolean
   volume: number
   showFormatBadges: boolean
+  languageOrder: string[]
 }
 
 const KEY = 'mte.preferences'
@@ -53,7 +74,9 @@ function empty(): Prefs {
   return {
     numberStart: 1,
     numberWidth: 0,
+    builtinOff: [],
     tokens: [],
+    checkUpdates: false,
     shortcuts: {},
     confirmWrite: true,
     confirmClose: true,
@@ -61,7 +84,8 @@ function empty(): Prefs {
     confirmClearLoad: true,
     rememberVolume: true,
     volume: 80,
-    showFormatBadges: true
+    showFormatBadges: true,
+    languageOrder: []
   }
 }
 
@@ -74,13 +98,16 @@ function read(): Prefs {
     const raw = localStorage.getItem(KEY)
     if (!raw) return empty()
     const parsed = JSON.parse(raw) as Partial<Prefs>
-    const tokens = Array.isArray(parsed.tokens)
-      ? parsed.tokens.filter((item): item is CustomToken => Boolean(item && typeof item.id === 'string' && typeof item.name === 'string' && typeof item.value === 'string'))
+    const tokens = Array.isArray(parsed.tokens) ? parsed.tokens.flatMap((item) => tokenOf(item)) : []
+    const builtinOff = Array.isArray(parsed.builtinOff)
+      ? parsed.builtinOff.filter((item): item is string => typeof item === 'string' && RESERVED.has(item))
       : []
     return {
       numberStart: clamp(parsed.numberStart, 0, 9999, 1),
       numberWidth: clamp(parsed.numberWidth, 0, 6, 0),
       tokens,
+      builtinOff,
+      checkUpdates: flag(parsed.checkUpdates, false),
       shortcuts: parsed.shortcuts && typeof parsed.shortcuts === 'object' ? parsed.shortcuts : {},
       confirmWrite: flag(parsed.confirmWrite, true),
       confirmClose: flag(parsed.confirmClose, true),
@@ -88,11 +115,21 @@ function read(): Prefs {
       confirmClearLoad: flag(parsed.confirmClearLoad, true),
       rememberVolume: flag(parsed.rememberVolume, true),
       volume: clamp(parsed.volume, 0, 100, 80),
-      showFormatBadges: flag(parsed.showFormatBadges, true)
+      showFormatBadges: flag(parsed.showFormatBadges, true),
+      languageOrder: Array.isArray(parsed.languageOrder)
+        ? [...new Set(parsed.languageOrder.filter((item): item is string => typeof item === 'string'))]
+        : []
     }
   } catch {
     return empty()
   }
+}
+
+function tokenOf(item: unknown): CustomToken[] {
+  if (!item || typeof item !== 'object') return []
+  const row = item as Record<string, unknown>
+  if (typeof row.id !== 'string' || typeof row.name !== 'string' || typeof row.value !== 'string') return []
+  return [{ id: row.id, name: row.name, value: row.value, enabled: row.enabled !== false }]
 }
 
 function clamp(value: unknown, min: number, max: number, fallback: number): number {
@@ -112,13 +149,7 @@ function persist(next: Prefs, native = true): void {
   }
   listeners.forEach((listener) => listener())
   if (!native) return
-  const shortcuts = {
-    open: electronAccelerator(shortcutOf('open')),
-    save: electronAccelerator(shortcutOf('save')),
-    undo: electronAccelerator(shortcutOf('undo')),
-    redo: electronAccelerator(shortcutOf('redo'))
-  }
-  void window.musicTagEditor?.setShortcuts(shortcuts)
+  void window.musicTagEditor?.setShortcuts(nativeShortcuts())
 }
 
 function write(next: Prefs): void {
@@ -156,7 +187,7 @@ const ELECTRON_KEYS: Record<string, string> = {
 }
 
 // Ключи, которые main (assertAccelerator) принимает; остальное в нативное меню не отдаём.
-const NATIVE_KEY = /^([A-Z0-9]|Delete|Backspace|Space|Home|End|Up|Down|Left|Right|F([1-9]|1[0-2]))$/
+const NATIVE_KEY = /^([A-Z0-9]|Delete|Backspace|Enter|Space|Home|End|Up|Down|Left|Right|F([1-9]|1[0-2]))$/
 
 export function electronAccelerator(chord: string): string {
   if (!chord) return ''
@@ -193,9 +224,15 @@ export function chordFromEvent(event: KeyboardEvent): string {
   return parts.join('+')
 }
 
+const PLUS_CHORDS = new Set(['Ctrl+=', 'Ctrl++', 'Ctrl+Shift+=', 'Ctrl+Shift++'])
+
 export function shortcutMatches(id: ShortcutId, event: KeyboardEvent): boolean {
   const chord = shortcutOf(id)
-  return Boolean(chord) && chordFromEvent(event) === chord
+  if (!chord) return false
+  const got = chordFromEvent(event)
+  if (got === chord) return true
+  // «+» на основной клавиатуре — это Shift+=, на цифровой — «+». Оба увеличивают масштаб.
+  return id === 'zoomIn' && PLUS_CHORDS.has(chord) && PLUS_CHORDS.has(got)
 }
 
 const MAC_KEYS: Record<string, string> = {
@@ -272,24 +309,38 @@ export function setShowFormatBadges(on: boolean): void {
   write({ ...current, showFormatBadges: on })
 }
 
+/** Порядок строк в списке языков: id встроенных ('ru', 'en') и языковых пакетов. */
+export function setLanguageOrder(ids: string[]): void {
+  persist({ ...current, languageOrder: [...new Set(ids)] }, false)
+}
+
 export function setPlayerVolume(value: number): void {
   const volume = clamp(value, 0, 100, 80)
   if (volume === current.volume) return
   persist({ ...current, volume }, false)
 }
 
-export function tokenNameError(name: string): boolean {
+export function tokenNameError(name: string, exceptId?: string): boolean {
   const clean = name.trim().toLowerCase()
   if (!/^[a-z][a-z0-9]{0,20}$/.test(clean)) return true
   if (RESERVED.has(clean)) return true
-  return current.tokens.some((item) => item.name.toLowerCase() === clean)
+  return current.tokens.some((item) => item.id !== exceptId && item.name.toLowerCase() === clean)
 }
 
 export function addToken(name: string, value: string): boolean {
   const clean = name.trim().toLowerCase()
   if (tokenNameError(clean)) return false
-  const tokens = [...current.tokens, { id: `${Date.now()}`, name: clean, value }]
+  const tokens = [...current.tokens, { id: `${Date.now()}`, name: clean, value, enabled: true }]
   write({ ...current, tokens })
+  return true
+}
+
+/** Меняет имя и значение своего оператора; место в списке и состояние «включён» сохраняются. */
+export function updateToken(id: string, name: string, value: string): boolean {
+  const clean = name.trim().toLowerCase()
+  if (tokenNameError(clean, id)) return false
+  if (!current.tokens.some((item) => item.id === id)) return false
+  write({ ...current, tokens: current.tokens.map((item) => (item.id === id ? { ...item, name: clean, value } : item)) })
   return true
 }
 
@@ -297,18 +348,53 @@ export function removeToken(id: string): void {
   write({ ...current, tokens: current.tokens.filter((item) => item.id !== id) })
 }
 
+export function setTokenEnabled(id: string, enabled: boolean): void {
+  write({ ...current, tokens: current.tokens.map((item) => (item.id === id ? { ...item, enabled } : item)) })
+}
+
+/** Операторы включены, если включён хотя бы один встроенный или свой. */
+export function operatorsEnabled(prefs: Prefs = current): boolean {
+  return prefs.builtinOff.length < RESERVED.size || prefs.tokens.some((item) => item.enabled)
+}
+
+/** Включить или выключить все операторы разом (встроенные и свои). */
+export function setAllOperators(enabled: boolean): void {
+  write({
+    ...current,
+    builtinOff: enabled ? [] : [...RESERVED],
+    tokens: current.tokens.map((item) => (item.enabled === enabled ? item : { ...item, enabled }))
+  })
+}
+
+export function setCheckUpdates(on: boolean): void {
+  write({ ...current, checkUpdates: on })
+}
+
 export function planTokens(): Record<string, string> {
   const tokens: Record<string, string> = {}
-  for (const item of current.tokens) tokens[item.name.toLowerCase()] = item.value
+  for (const item of current.tokens) {
+    if (item.enabled) tokens[item.name.toLowerCase()] = item.value
+  }
   return tokens
 }
 
-export function syncShortcuts(): void {
-  const native = {
+export function nativeShortcuts(): NativeShortcuts {
+  return {
     open: electronAccelerator(shortcutOf('open')),
+    folder: electronAccelerator(shortcutOf('folder')),
+    openFile: electronAccelerator(shortcutOf('openFile')),
+    formatBadges: electronAccelerator(shortcutOf('formatBadges')),
     save: electronAccelerator(shortcutOf('save')),
     undo: electronAccelerator(shortcutOf('undo')),
     redo: electronAccelerator(shortcutOf('redo'))
   }
-  void window.musicTagEditor?.setShortcuts(native)
+}
+
+/** Системное меню уже забрало это сочетание, повторно в окне его не ловим. */
+export function menuOwnsShortcut(id: ShortcutId): boolean {
+  return electronAccelerator(shortcutOf(id)) !== ''
+}
+
+export function syncShortcuts(): void {
+  void window.musicTagEditor?.setShortcuts(nativeShortcuts())
 }

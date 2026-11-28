@@ -137,13 +137,14 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
 
   const openKey = useShortcut('open')
   const saveKey = useShortcut('save')
+  const clearKey = useShortcut('clear')
   const commands = useMemo(
     () => [
       { id: 'open', label: pack.openFiles, shortcut: openKey, icon: <FolderIcon />, run: () => void openDialog() },
       { id: 'save', label: pack.writeTags, shortcut: saveKey, icon: <DownloadIcon />, run: () => saveAll() },
-      { id: 'clear', label: pack.clearList, shortcut: '', icon: <TrashIcon />, run: requestClear }
+      { id: 'clear', label: pack.clearList, shortcut: clearKey, icon: <TrashIcon />, run: requestClear }
     ],
-    [openDialog, saveAll, requestClear, pack.openFiles, pack.writeTags, pack.clearList, openKey, saveKey]
+    [openDialog, saveAll, requestClear, pack.openFiles, pack.writeTags, pack.clearList, openKey, saveKey, clearKey]
   )
 
   // Строка поиска собирается вместе с пачкой, а не на каждый символ.

@@ -171,6 +171,17 @@ export type HistoryMap = Record<HistoryField, string[]>
 
 export type SheetTab = 'main' | 'note' | 'lyrics' | 'detail' | 'file'
 
+/** Сочетания, которые регистрирует системное меню. Пробел сюда не входит: его съел бы ввод в полях. */
+export interface NativeShortcuts {
+  open: string
+  folder: string
+  openFile: string
+  formatBadges: string
+  save: string
+  undo: string
+  redo: string
+}
+
 export type MenuCommand =
   | 'open'
   | 'folder'
@@ -184,10 +195,21 @@ export type MenuCommand =
   | 'clear'
   | 'reveal'
   | 'openFile'
+  | 'formatBadges'
+  | 'play'
   | 'palette'
   | 'settings'
   | 'toggleSidebar'
   | 'togglePlayer'
+  | 'zoomIn'
+  | 'zoomOut'
+  | 'zoomReset'
+  | 'reload'
+  | 'quit'
+  | 'alwaysOnTop'
+  | 'helpShortcuts'
+  | 'github'
+  | 'report'
   | `tab:${SheetTab}`
 
 export const ZOOM_STEPS = [0.8, 0.9, 1, 1.1, 1.25, 1.5] as const
@@ -226,6 +248,7 @@ export interface AppSettingsSnapshot {
 }
 
 export const REPOSITORY_URL = 'https://github.com/openflp/music-tag-editor'
+export const RELEASES_URL = 'https://github.com/openflp/music-tag-editor/releases'
 export const ISSUES_URL = 'https://github.com/openflp/music-tag-editor/issues/new'
 
 export const IPC = {
@@ -255,9 +278,13 @@ export const IPC = {
   openPath: 'shell:open',
   openDir: 'shell:open-dir',
   openRepository: 'shell:open-repository',
+  openReleases: 'shell:open-releases',
+  openRelease: 'shell:open-release',
   openIssues: 'shell:open-issues',
   reloadWindow: 'window:reload',
   setLocale: 'app:locale',
+  appVersion: 'app:version',
+  checkUpdates: 'app:updates',
   getAppSettings: 'app:settings-get',
   setAppSettings: 'app:settings-set',
   loadLanguagePack: 'app:language-pack',

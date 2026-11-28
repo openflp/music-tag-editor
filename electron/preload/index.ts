@@ -2,14 +2,17 @@ import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import { initCustomTitlebar, titlebarOverlayColors } from './titlebar'
 import type { StoredRhythm } from '@shared/analysis'
 import type { LanguagePack } from '@shared/language-pack'
+import type { ReleaseInfo } from '@shared/update'
 import {
   IPC,
+  RELEASES_URL,
   REPOSITORY_URL,
   type AppSettings,
   type AppSettingsSnapshot,
   type CoverArt,
   type HistoryMap,
   type MenuCommand,
+  type NativeShortcuts,
   type ProgressEvent,
   type TrackSnapshot,
   type WriteJob,
@@ -62,6 +65,10 @@ const api = {
   openPath: (path: string): Promise<void> => ipcRenderer.invoke(IPC.openPath, path),
   openDir: (path: string): Promise<void> => ipcRenderer.invoke(IPC.openDir, path),
   openRepository: (): Promise<void> => ipcRenderer.invoke(IPC.openRepository, REPOSITORY_URL),
+  openReleases: (): Promise<void> => ipcRenderer.invoke(IPC.openReleases, RELEASES_URL),
+  openRelease: (tag: string): Promise<void> => ipcRenderer.invoke(IPC.openRelease, tag),
+  appVersion: (): Promise<string> => ipcRenderer.invoke(IPC.appVersion),
+  checkUpdates: (): Promise<{ current: string; versions: ReleaseInfo[] }> => ipcRenderer.invoke(IPC.checkUpdates),
   openIssues: (details: string): Promise<void> => ipcRenderer.invoke(IPC.openIssues, details),
   reloadWindow: (): Promise<void> => ipcRenderer.invoke(IPC.reloadWindow),
   setTitlebarDim: (dim: boolean): void => {
@@ -71,7 +78,7 @@ const api = {
   getAppSettings: (): Promise<AppSettingsSnapshot> => ipcRenderer.invoke(IPC.getAppSettings),
   setAppSettings: (patch: Partial<AppSettings>): Promise<AppSettingsSnapshot> => ipcRenderer.invoke(IPC.setAppSettings, patch),
   loadLanguagePack: (): Promise<LanguagePack | null> => ipcRenderer.invoke(IPC.loadLanguagePack),
-  setShortcuts: (shortcuts: { open: string; save: string; undo: string; redo: string }): Promise<void> => ipcRenderer.invoke(IPC.setShortcuts, shortcuts),
+  setShortcuts: (shortcuts: NativeShortcuts): Promise<void> => ipcRenderer.invoke(IPC.setShortcuts, shortcuts),
   confirmClose: (): Promise<void> => ipcRenderer.invoke(IPC.closeConfirm, true),
   onCloseQuery: (callback: () => void): (() => void) => {
     const listener = () => callback()

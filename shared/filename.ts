@@ -12,6 +12,7 @@ export interface FileNamePlan {
   start?: number
   width?: number
   tokens?: Record<string, string>
+  off?: readonly string[]
 }
 
 export interface FileParts {
@@ -93,10 +94,12 @@ function replaceTokens(value: string, replacer: (name: string) => string | undef
   return value.replace(/%([a-z][a-z0-9]*)%/gi, (all, key: string) => replacer(key.toLowerCase()) ?? all)
 }
 
-export function expandOperators(value: string, tags: TrackTags, sourcePath: string, number?: string, tokens?: Record<string, string>, emptyNumber = false): string {
+export function expandOperators(value: string, tags: TrackTags, sourcePath: string, number?: string, tokens?: Record<string, string>, emptyNumber = false, off?: readonly string[]): string {
   if (!value.includes('%')) return value
   const file = fileParts(sourcePath)
+  const blocked = off?.length ? new Set(off) : null
   const rawOf = (name: string): string | undefined => {
+    if (blocked?.has(name)) return undefined
     if (name === 'n') return number ?? (emptyNumber ? '' : undefined)
     if (tokens && Object.prototype.hasOwnProperty.call(tokens, name)) return tokens[name] ?? ''
     const token = TOKEN_VALUE[name]
@@ -134,9 +137,9 @@ export function shuffleNumbers(paths: string[], seed: number, options?: { start?
   return numbers
 }
 
-export function applyMask(mask: string, tags: TrackTags, sourcePath: string, number?: string, tokens?: Record<string, string>): string {
+export function applyMask(mask: string, tags: TrackTags, sourcePath: string, number?: string, tokens?: Record<string, string>, off?: readonly string[]): string {
   const file = fileParts(sourcePath)
-  const replaced = expandOperators(mask, tags, sourcePath, number, tokens, true)
+  const replaced = expandOperators(mask, tags, sourcePath, number, tokens, true, off)
   let stem = sanitizeFileStem(replaced)
   if (file.ext && stem.toLowerCase().endsWith(file.ext.toLowerCase())) stem = sanitizeFileStem(stem.slice(0, -file.ext.length))
   return stem || file.stem
@@ -156,7 +159,7 @@ export function resolveTarget(sourcePath: string, tags: TrackTags, plan?: FileNa
   if (!mask && !directory) return null
   const file = fileParts(sourcePath)
   const number = plan.numbers?.[sourcePath]
-  const stem = mask ? applyMask(mask, tags, sourcePath, number, plan.tokens) : file.stem
+  const stem = mask ? applyMask(mask, tags, sourcePath, number, plan.tokens, plan.off) : file.stem
   const dir = directory || file.dir
   const target = joinPath(dir, `${stem}${file.ext}`)
   if (sameFilePath(target, sourcePath, plan.platform)) return null

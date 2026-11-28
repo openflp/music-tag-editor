@@ -84,25 +84,29 @@ export function preparePlan(tracks: PlanTrack[], state: PlanState): PlanState {
   }
 }
 
+function assignApply<K extends (typeof APPLY_FIELDS)[number]>(tags: TrackTags, field: K, value: TrackTags[K]): void {
+  tags[field] = value
+}
+
 function overlayTags(track: PlanTrack, state: PlanState): TrackTags {
   const tags = { ...track.draft }
   for (const field of APPLY_FIELDS) {
-    if (state.applyAll[field]) tags[field] = state.applyValues[field]
+    if (state.applyAll[field]) assignApply(tags, field, state.applyValues[field])
   }
   return tags
 }
 
-export function shownText(value: string, tags: TrackTags, sourcePath: string, number?: string, tokens?: Record<string, string>): string {
-  const expanded = expandOperators(value, tags, sourcePath, number, tokens).trim()
+export function shownText(value: string, tags: TrackTags, sourcePath: string, number?: string, tokens?: Record<string, string>, off?: readonly string[]): string {
+  const expanded = expandOperators(value, tags, sourcePath, number, tokens, false, off).trim()
   return expanded || value.trim()
 }
 
-function stampTags(tags: TrackTags, sourcePath: string, number: string | undefined, tokens?: Record<string, string>): TrackTags {
+function stampTags(tags: TrackTags, sourcePath: string, number: string | undefined, tokens?: Record<string, string>, off?: readonly string[]): TrackTags {
   const next = { ...tags }
   for (const field of TEXT_FIELDS) {
     const value = next[field]
     if (typeof value !== 'string' || !value.includes('%')) continue
-    const expanded = expandOperators(value, tags, sourcePath, number, tokens)
+    const expanded = expandOperators(value, tags, sourcePath, number, tokens, false, off)
     if (expanded !== value) next[field] = expanded
   }
   if (!number) return next
@@ -113,26 +117,26 @@ function stampTags(tags: TrackTags, sourcePath: string, number: string | undefin
 
 function namePlan(state: PlanState): FileNamePlan | undefined {
   const plan = state.fileName
-  if (!plan?.numbers || hasNumberToken(plan.mask)) return plan
+  if (!plan?.numbers || hasNumberToken(plan.mask) || plan.off?.includes('n')) return plan
   const mask = plan.mask.trim()
   return { ...plan, mask: mask ? `%n% ${mask}` : '%n% %filename%' }
 }
 
 export function shownTrackTitle(track: PlanTrack, state: PlanState): string {
   const tags = overlayTags(track, state)
-  const title = shownText(tags.title, tags, track.path, state.fileName?.numbers?.[track.path], state.fileName?.tokens)
+  const title = shownText(tags.title, tags, track.path, state.fileName?.numbers?.[track.path], state.fileName?.tokens, state.fileName?.off)
   if (title) return title
   return fileName(resolveTarget(track.path, writtenTags(track, state), namePlan(state)) ?? track.path)
 }
 
 export function shownTrackArtist(track: PlanTrack, state: PlanState): string {
   const tags = overlayTags(track, state)
-  return shownText(tags.artist, tags, track.path, state.fileName?.numbers?.[track.path], state.fileName?.tokens)
+  return shownText(tags.artist, tags, track.path, state.fileName?.numbers?.[track.path], state.fileName?.tokens, state.fileName?.off)
 }
 
 export function writtenTags(track: PlanTrack, state: PlanState): TrackTags {
   const tags = overlayTags(track, state)
-  return stampTags(tags, track.path, state.fileName?.numbers?.[track.path], state.fileName?.tokens)
+  return stampTags(tags, track.path, state.fileName?.numbers?.[track.path], state.fileName?.tokens, state.fileName?.off)
 }
 
 export interface PreviewWords {

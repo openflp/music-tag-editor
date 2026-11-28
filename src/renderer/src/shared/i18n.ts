@@ -130,6 +130,48 @@ export function saveLanguagePack(pack: LanguagePack): LanguagePack {
   return clean
 }
 
+export interface PackAuditRow {
+  id: string
+  name: string
+  ok: boolean
+}
+
+/** Сверяет сохранённый JSON с правилами пакета. Встроенные языки всегда целые. */
+export function auditLanguagePacks(): { rows: PackAuditRow[]; failed: boolean } {
+  const builtin: PackAuditRow[] = [
+    { id: 'ru', name: 'Русский', ok: true },
+    { id: 'en', name: 'English', ok: true }
+  ]
+  let raw: string | null
+  try {
+    raw = localStorage.getItem(PACKS_KEY)
+  } catch {
+    return { rows: builtin, failed: true }
+  }
+  if (!raw) {
+    return { rows: [...builtin, ...packs.map((item) => ({ id: item.id, name: item.name, ok: true }))], failed: false }
+  }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw) as unknown
+  } catch {
+    return { rows: builtin, failed: true }
+  }
+  if (!Array.isArray(parsed)) return { rows: builtin, failed: true }
+  const custom: PackAuditRow[] = parsed.slice(0, MAX_PACKS).map((item, index) => {
+    try {
+      const pack = parseLanguagePack(item)
+      return { id: pack.id, name: pack.name, ok: true }
+    } catch {
+      const name = item && typeof item === 'object' && typeof (item as { name?: unknown }).name === 'string'
+        ? (item as { name: string }).name.trim() || String(index + 1)
+        : String(index + 1)
+      return { id: `broken:${index}`, name, ok: false }
+    }
+  })
+  return { rows: [...builtin, ...custom], failed: false }
+}
+
 export function removeLanguagePack(id: string): void {
   packs = packs.filter((item) => item.id !== id)
   storePacks()

@@ -80,7 +80,7 @@ function encodeBase64(bytes: Uint8Array): string {
 }
 
 // тот же отпечаток, что и в main (tag-io coverKey): размер + первые 20 hex-символов sha1
-async function coverKeyOf(bytes: Uint8Array): Promise<string | undefined> {
+async function coverKeyOf(bytes: Uint8Array<ArrayBuffer>): Promise<string | undefined> {
   try {
     const digest = await crypto.subtle.digest('SHA-1', bytes)
     const hex = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('')
